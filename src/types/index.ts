@@ -111,3 +111,45 @@ export const TEMPLATE_SECTION_LABELS: Record<TemplateSectionKey, string> = {
   anesthesiaNote: '麻醉说明',
   postOperative: '术后注意事项',
 };
+
+export type QCIssueType =
+  | 'missing_signature'
+  | 'signed_but_unread'
+  | 'empty_resign_reason'
+  | 'today_pending_no_followup'
+  | 'missing_snapshot';
+
+export interface QCIssue {
+  id: string;
+  type: QCIssueType;
+  recordId: string;
+  title: string;
+  description: string;
+  severity: 'high' | 'medium' | 'low';
+  resolved: boolean;
+  resolvedBy?: string;
+  resolvedAt?: string;
+  resolvedRemark?: string;
+  createdAt: string;
+}
+
+export interface ArchivePackage {
+  id: string;
+  name: string;
+  createdAt: string;
+  createdBy: string;
+  recordIds: string[];
+  filters: {
+    month?: string;
+    itemCode?: string;
+    operator?: string;
+  };
+}
+
+export const QC_ISSUE_LABELS: Record<QCIssueType, { label: string; severity: 'high' | 'medium' | 'low' }> = {
+  missing_signature: { label: '已签署但缺少签名数据', severity: 'high' },
+  signed_but_unread: { label: '已签署但步骤未全部读完', severity: 'medium' },
+  empty_resign_reason: { label: '补签记录缺少补签原因', severity: 'medium' },
+  today_pending_no_followup: { label: '今日漏签未安排跟进', severity: 'high' },
+  missing_snapshot: { label: '签署记录缺少内容快照', severity: 'low' },
+};

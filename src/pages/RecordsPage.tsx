@@ -4,14 +4,16 @@ import {
   Search, Calendar, Eye, Printer, RotateCcw, FileCheck, FileX, FileClock,
   Hash, ChevronDown, X, Download, Filter, AlertCircle, History, User, Clock,
   MessageSquare, Send, Phone, Users, CheckCircle2, ClipboardList, Layers,
+  Archive, ShieldAlert, FileSearch, Package, ChevronRight,
 } from 'lucide-react';
 import StatusBadge from '@/components/StatusBadge';
 import { useConsentStore } from '@/store/consentStore';
 import { formatDate } from '@/utils/date';
-import { resolveTemplate } from '@/data/consentTemplates';
+import { resolveTemplate, getTemplateByCode } from '@/data/consentTemplates';
 import { TREATMENT_ITEMS } from '@/data/treatmentItems';
 import PrintLayout from '@/components/PrintLayout';
-import type { ConsentRecord, ConsentStatus, SignHistory } from '@/types';
+import type { ConsentRecord, ConsentStatus, SignHistory, QCIssue, QCIssueType, ArchivePackage } from '@/types';
+import { QC_ISSUE_LABELS } from '@/types';
 
 type FilterKey = 'all' | ConsentStatus;
 
@@ -30,6 +32,11 @@ const RESIGN_REASON_PRESETS = [
   '模板内容更新需重签',
   '其他原因',
 ];
+
+const OPERATORS = ['王助理', '李咨询师', '张医生', '刘主任', '陈护士'];
+
+const generateId = (prefix = 'id') => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const nowISO = () => new Date().toISOString();
 
 export default function RecordsPage() {
   const navigate = useNavigate();
@@ -50,6 +57,8 @@ export default function RecordsPage() {
   const [resignPreset, setResignPreset] = useState('');
   const [showCheckPanel, setShowCheckPanel] = useState(false);
   const [checkRemark, setCheckRemark] = useState('');
+  const [showArchivePanel, setShowArchivePanel] = useState(false);
+  const [showQCPanel, setShowQCPanel] = useState(false);
 
   const counts = useMemo(() => ({
     all: records.length,
@@ -112,7 +121,17 @@ export default function RecordsPage() {
       return (o.riskNotice || o.alternatives || o.anesthesiaNote || o.postOperative) ? '是' : '否';
     };
 
-    const header = '编号,患者姓名,性别,年龄,病历号,联系电话,就诊项目,治疗牙位,费用说明,状态,是否自定义模板,咨询师,创建时间,签署时间,补签次数,跟进状态';
+    const formatSection = (items?: string[]) => (items && items.length > 0 ? items.join('；') : '');
+    const diffSection = (record: ConsentRecord, key: 'riskNotice' | 'alternatives' | 'anesthesiaNote' | 'postOperative') => {
+      const standard = getTemplateByCode(record.item.code);
+      const override = record.templateOverride?.[key];
+      const standardContent = standard?.[key] ?? [];
+      const actual = override ?? standardContent;
+      const marker = override ? '[已自定义] ' : '';
+      return marker + formatSection(actual);
+    };
+
+    const header = '编号,患者姓名,性别,年龄,病历号,联系电话,就诊项目,治疗牙位,费用说明,状态,是否自定义模板,咨询师,创建时间,签署时间,补签次数,跟进状态,风险告知,替代方案,麻醉说明,术后注意事项';
     const rows = todays.map((r) => [
       r.id.slice(-8).toUpperCase(),
       r.patient.name,
@@ -133,6 +152,10 @@ export default function RecordsPage() {
         r.followUp.status === 'called' ? '已电话提醒' :
         r.followUp.status === 'onsite' ? '已现场处理' : '已完成'
       ) : '',
+      diffSection(r, 'riskNotice'),
+      diffSection(r, 'alternatives'),
+      diffSection(r, 'anesthesiaNote'),
+      diffSection(r, 'postOperative'),
     ].map((v) => `"${String(v).replace(/"/g, '""')}"`).join(','));
 
     const csv = '\ufeff' + [header, ...rows].join('\n');
@@ -203,7 +226,7 @@ export default function RecordsPage() {
         <StatTile label="今日需补签" value={todayStats.resign} color="text-status-resign" bg="from-red-50 to-white" icon="🔄" />
       </div>
 
-      <div className="flex justify-end mb-4 animate-fade-in">
+      <div className="flex justify-end mb-4 animate-fade-in gap-2">
         <button
           type="button"
           onClick={() => setShowCheckPanel(true)}
@@ -211,6 +234,22 @@ export default function RecordsPage() {
         >
           <ClipboardList size={14} />
           今日漏签核对面板
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowQCPanel(true)}
+          className="btn-outline text-sm"
+        >
+          <ShieldAlert size={14} />
+          签后质控视图
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowArchivePanel(true)}
+          className="btn-outline text-sm"
+        >
+          <Archive size={14} />
+          归档中心
         </button>
       </div>
 
@@ -389,7 +428,7 @@ export default function RecordsPage() {
 
       {detail && (
         <DetailModal
-          record={detail}
+          recordId={detail.id}
           onClose={() => setDetail(null)}
           onSign={(r) => {
             if (r.status === 'signed') {
@@ -413,6 +452,32 @@ export default function RecordsPage() {
           }}
           onOpenDetail={(r) => {
             setShowCheckPanel(false);
+            setDetail(r);
+          }}
+        />
+      )}
+
+      {showQCPanel && (
+        <QCPanel
+          records={records}
+          onClose={() => setShowQCPanel(false)}
+          onOpenDetail={(r) => {
+            setShowQCPanel(false);
+            setDetail(r);
+          }}
+          onAddNote={(id, content) => addNote(id, content, '王助理')}
+          onMarkFollowUp={(id, status, remark) => {
+            setFollowUp(id, status, '王助理', remark);
+          }}
+        />
+      )}
+
+      {showArchivePanel && (
+        <ArchivePanel
+          records={records}
+          onClose={() => setShowArchivePanel(false)}
+          onOpenDetail={(r) => {
+            setShowArchivePanel(false);
             setDetail(r);
           }}
         />
@@ -519,16 +584,25 @@ function StatTile({ label, value, color, bg, icon }: { label: string; value: num
 }
 
 function DetailModal({
-  record, onClose, onSign, onPrint, onAddNote,
+  recordId, onClose, onSign, onPrint, onAddNote,
 }: {
-  record: ConsentRecord;
+  recordId: string;
   onClose: () => void;
   onSign: (r: ConsentRecord) => void;
   onPrint: (r: ConsentRecord) => void;
   onAddNote: (id: string, content: string) => void;
 }) {
+  const record = useConsentStore((s) => s.records.find((r) => r.id === recordId));
   const [activeVersion, setActiveVersion] = useState<'current' | number>('current');
   const [noteContent, setNoteContent] = useState('');
+
+  if (!record) {
+    return (
+      <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center" onClick={onClose}>
+        <div className="bg-white rounded-2xl p-8 text-gray-500">记录不存在</div>
+      </div>
+    );
+  }
 
   const signHistory = record.signHistory ?? [];
   const resignCount = signHistory.filter((h) => h.type === 'resign').length;
@@ -1122,6 +1196,612 @@ function CheckStatCard({ label, value, color, bg }: { label: string; value: numb
     <div className={`px-3 py-2.5 rounded-xl ${bg} border border-white shadow-sm`}>
       <div className="text-[10px] text-gray-500 mb-0.5">{label}</div>
       <div className={`text-xl font-bold ${color}`}>{value}</div>
+    </div>
+  );
+}
+
+function QCPanel({
+  records, onClose, onOpenDetail, onAddNote, onMarkFollowUp,
+}: {
+  records: ConsentRecord[];
+  onClose: () => void;
+  onOpenDetail: (r: ConsentRecord) => void;
+  onAddNote: (id: string, content: string) => void;
+  onMarkFollowUp: (id: string, status: 'called' | 'onsite' | 'completed', remark?: string) => void;
+}) {
+  const [resolvedMap, setResolvedMap] = useState<Record<string, { by: string; at: string; remark?: string }>>({});
+  const [remarkInput, setRemarkInput] = useState<Record<string, string>>({});
+  const [filterType, setFilterType] = useState<'all' | QCIssueType>('all');
+
+  const issues = useMemo<QCIssue[]>(() => {
+    const result: QCIssue[] = [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const t = today.getTime();
+
+    records.forEach((r) => {
+      if (r.status === 'signed' && !r.signatureData) {
+        result.push({
+          id: `q-missig-${r.id}`,
+          type: 'missing_signature',
+          recordId: r.id,
+          title: QC_ISSUE_LABELS.missing_signature.label,
+          description: '已标记为已签署但缺少签名图片数据，请检查签署流程或申请补签',
+          severity: 'high',
+          resolved: !!resolvedMap[`q-missig-${r.id}`],
+          createdAt: r.signedAt || r.createdAt,
+        });
+      }
+      if (r.status === 'signed') {
+        const allRead = r.readings?.risk && r.readings?.alternatives && r.readings?.anesthesia && r.readings?.postOperative;
+        if (!allRead) {
+          result.push({
+            id: `q-unread-${r.id}`,
+            type: 'signed_but_unread',
+            recordId: r.id,
+            title: QC_ISSUE_LABELS.signed_but_unread.label,
+            description: (() => {
+              const missing: string[] = [];
+              if (!r.readings?.risk) missing.push('风险告知');
+              if (!r.readings?.alternatives) missing.push('替代方案');
+              if (!r.readings?.anesthesia) missing.push('麻醉说明');
+              if (!r.readings?.postOperative) missing.push('术后注意事项');
+              return `未完成阅读的步骤：${missing.join('、')}`;
+            })(),
+            severity: 'medium',
+            resolved: !!resolvedMap[`q-unread-${r.id}`],
+            createdAt: r.signedAt || r.createdAt,
+          });
+        }
+      }
+      if ((r.status === 'resign' || (r.signHistory?.filter((h) => h.type === 'resign').length ?? 0) > 0) && !r.resignReason) {
+        result.push({
+          id: `q-resign-${r.id}`,
+          type: 'empty_resign_reason',
+          recordId: r.id,
+          title: QC_ISSUE_LABELS.empty_resign_reason.label,
+          description: '补签记录缺少补签原因说明，请补充记录便于追溯',
+          severity: 'medium',
+          resolved: !!resolvedMap[`q-resign-${r.id}`],
+          createdAt: r.createdAt,
+        });
+      }
+      if ((r.status === 'pending' || r.status === 'resign') && new Date(r.createdAt).getTime() >= t && (!r.followUp || r.followUp.status === 'pending')) {
+        result.push({
+          id: `q-follow-${r.id}`,
+          type: 'today_pending_no_followup',
+          recordId: r.id,
+          title: QC_ISSUE_LABELS.today_pending_no_followup.label,
+          description: '今日待签署/需补签记录尚未安排跟进',
+          severity: 'high',
+          resolved: !!resolvedMap[`q-follow-${r.id}`],
+          createdAt: r.createdAt,
+        });
+      }
+      if (r.status === 'signed' && (!r.signHistory || r.signHistory.length === 0 || !r.signHistory[0].snapshot)) {
+        result.push({
+          id: `q-snap-${r.id}`,
+          type: 'missing_snapshot',
+          recordId: r.id,
+          title: QC_ISSUE_LABELS.missing_snapshot.label,
+          description: '签署记录缺少签署时的内容快照，历史版本追溯将不可用',
+          severity: 'low',
+          resolved: !!resolvedMap[`q-snap-${r.id}`],
+          createdAt: r.signedAt || r.createdAt,
+        });
+      }
+    });
+
+    return result.sort((a, b) => {
+      const sevOrder = { high: 0, medium: 1, low: 2 };
+      if (sevOrder[a.severity] !== sevOrder[b.severity]) return sevOrder[a.severity] - sevOrder[b.severity];
+      return a.createdAt < b.createdAt ? -1 : 1;
+    });
+  }, [records, resolvedMap]);
+
+  const filteredIssues = useMemo(() => (
+    filterType === 'all' ? issues : issues.filter((i) => i.type === filterType)
+  ), [issues, filterType]);
+
+  const stats = useMemo(() => ({
+    total: issues.length,
+    high: issues.filter((i) => i.severity === 'high').length,
+    medium: issues.filter((i) => i.severity === 'medium').length,
+    low: issues.filter((i) => i.severity === 'low').length,
+    resolved: issues.filter((i) => i.resolved).length,
+  }), [issues]);
+
+  function markResolved(issue: QCIssue) {
+    setResolvedMap({
+      ...resolvedMap,
+      [issue.id]: { by: '王助理', at: nowISO(), remark: remarkInput[issue.id] || undefined },
+    });
+    if (issue.type === 'today_pending_no_followup') {
+      onMarkFollowUp(issue.recordId, 'called', remarkInput[issue.id] || '质控已核查');
+    } else if (remarkInput[issue.id]) {
+      onAddNote(issue.recordId, `【质控处理】${remarkInput[issue.id]}`);
+    }
+    setRemarkInput({ ...remarkInput, [issue.id]: '' });
+  }
+
+  const severityBadge = (s: 'high' | 'medium' | 'low') => (
+    s === 'high' ? <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-600 border border-red-200 font-medium">高风险</span> :
+    s === 'medium' ? <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-600 border border-amber-200 font-medium">中风险</span> :
+    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-50 text-gray-500 border border-gray-200 font-medium">低风险</span>
+  );
+
+  const uniqueTypes = Array.from(new Set(issues.map((i) => i.type)));
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center animate-fade-in p-4 no-print" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-[1200px] max-h-[90vh] overflow-hidden animate-scale-in flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-red-50 via-white to-purple-50">
+          <div className="flex items-center gap-4">
+            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-red-100 to-purple-100 flex items-center justify-center text-2xl">
+              <ShieldAlert size={22} className="text-red-600" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                签后质控视图
+                <span className="text-[11px] text-red-600 bg-red-50 px-2 py-0.5 rounded-full border border-red-200 font-medium">
+                  {issues.length - stats.resolved} / {issues.length} 待处理
+                </span>
+              </h3>
+              <p className="text-xs text-gray-500 mt-0.5">
+                自动检测异常：高风险 {stats.high} · 中风险 {stats.medium} · 低风险 {stats.low} · 已处理 {stats.resolved}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <button onClick={onClose} className="w-8 h-8 rounded-full hover:bg-gray-100 flex items-center justify-center text-gray-500">
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        <div className="px-6 py-3 border-b border-gray-100 flex items-center justify-between bg-gray-50/50 flex-wrap gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-gray-500">类型筛选：</span>
+            <div className="flex bg-gray-100 rounded-lg p-0.5 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setFilterType('all')}
+                className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                  filterType === 'all' ? 'bg-white text-primary-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                全部
+              </button>
+              {uniqueTypes.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setFilterType(t)}
+                  className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                    filterType === t ? 'bg-white text-primary-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  {QC_ISSUE_LABELS[t].label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="text-xs text-gray-400">
+            共 {filteredIssues.length} 条异常记录
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-auto p-6 space-y-3">
+          {filteredIssues.map((issue) => {
+            const record = records.find((r) => r.id === issue.recordId);
+            if (!record) return null;
+            return (
+              <div key={issue.id} className={`card overflow-hidden ${issue.resolved ? 'opacity-60' : ''}`}>
+                <div className="px-4 py-3 border-b border-gray-50 flex items-center gap-3">
+                  {severityBadge(issue.severity)}
+                  <span className="font-semibold text-gray-800 text-sm">{issue.title}</span>
+                  <span className="text-[10px] text-gray-400 flex-1">{issue.description}</span>
+                  {issue.resolved && resolvedMap[issue.id] && (
+                    <span className="text-[10px] text-green-600 bg-green-50 px-2 py-0.5 rounded-full border border-green-200 font-medium">
+                      ✓ 已处理 · {resolvedMap[issue.id].by} · {formatDate(resolvedMap[issue.id].at, 'time')}
+                    </span>
+                  )}
+                </div>
+                <div className="px-4 py-3 flex items-center gap-4">
+                  <div className="w-9 h-9 rounded-full bg-gradient-to-br from-red-100 to-purple-100 text-red-700 flex items-center justify-center font-semibold text-sm border border-white shadow-sm shrink-0">
+                    {record.patient.name.slice(0, 1)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-gray-800 text-sm">{record.patient.name}</span>
+                      <span className="text-[11px] text-gray-400">{record.patient.gender}·{record.patient.age}岁</span>
+                      <span className="text-[10px] px-1.5 py-0.5 bg-primary-50 text-primary-600 rounded font-mono">{record.item.name}</span>
+                      <span className="text-[10px] text-gray-400">{record.toothPosition}</span>
+                      <StatusBadge status={record.status} size="sm" />
+                    </div>
+                    <div className="text-[11px] text-gray-500 mt-0.5 font-mono">
+                      {record.patient.medicalRecordNo} · 签署时间 {record.signedAt ? formatDate(record.signedAt, 'datetime') : '未签署'}
+                      {record.operator && <span className="ml-2">· 咨询师：{record.operator}</span>}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {!issue.resolved && (
+                      <input
+                        type="text"
+                        className="input-field w-32 text-xs py-1"
+                        placeholder="处理说明..."
+                        value={remarkInput[issue.id] ?? ''}
+                        onChange={(e) => setRemarkInput({ ...remarkInput, [issue.id]: e.target.value })}
+                      />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => onOpenDetail(record)}
+                      className="btn-outline text-xs py-1 px-2.5"
+                    >
+                      <Eye size={12} />
+                      详情
+                    </button>
+                    {!issue.resolved && (
+                      <button
+                        type="button"
+                        onClick={() => markResolved(issue)}
+                        className="btn-primary text-xs py-1 px-2.5"
+                      >
+                        <CheckCircle2 size={12} />
+                        标记处理
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+
+          {filteredIssues.length === 0 && (
+            <div className="text-center py-16">
+              <div className="text-5xl mb-3 opacity-40">✅</div>
+              <p className="text-gray-400 text-sm">暂无{filterType === 'all' ? '' : QC_ISSUE_LABELS[filterType as QCIssueType].label}异常记录</p>
+            </div>
+          )}
+        </div>
+
+        <div className="px-6 py-3.5 border-t border-gray-100 bg-gray-50/50 flex items-center justify-between">
+          <p className="text-[11px] text-gray-400">
+            💡 下班前请逐一处理质控异常，标记完成后可作为当日下班核对依据
+          </p>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500">
+              待处理：{issues.filter(i => !i.resolved).length}
+            </span>
+            <button onClick={onClose} className="btn-primary text-sm">
+              <CheckCircle2 size={14} />
+              完成质控
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ArchivePanel({
+  records, onClose, onOpenDetail,
+}: {
+  records: ConsentRecord[];
+  onClose: () => void;
+  onOpenDetail: (r: ConsentRecord) => void;
+}) {
+  const [monthFilter, setMonthFilter] = useState<string>('all');
+  const [itemFilter, setItemFilter] = useState<string>('all');
+  const [operatorFilter, setOperatorFilter] = useState<string>('all');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [archivedPackages, setArchivedPackages] = useState<ArchivePackage[]>([]);
+
+  const signedRecords = useMemo(() => records.filter((r) => r.status === 'signed'), [records]);
+
+  const monthOptions = useMemo(() => {
+    const months = new Set<string>();
+    signedRecords.forEach((r) => {
+      const d = new Date(r.signedAt || r.createdAt);
+      months.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    });
+    return Array.from(months).sort().reverse();
+  }, [signedRecords]);
+
+  const operators = useMemo(() => {
+    const set = new Set<string>();
+    signedRecords.forEach((r) => r.operator && set.add(r.operator));
+    return Array.from(set);
+  }, [signedRecords]);
+
+  const filtered = useMemo(() => (
+    signedRecords.filter((r) => {
+      if (monthFilter !== 'all') {
+        const d = new Date(r.signedAt || r.createdAt);
+        const m = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        if (m !== monthFilter) return false;
+      }
+      if (itemFilter !== 'all' && r.item.code !== itemFilter) return false;
+      if (operatorFilter !== 'all' && r.operator !== operatorFilter) return false;
+      return true;
+    }).sort((a, b) => (b.signedAt || b.createdAt).localeCompare(a.signedAt || a.createdAt))
+  ), [signedRecords, monthFilter, itemFilter, operatorFilter]);
+
+  function toggleSelect(id: string) {
+    const next = new Set(selectedIds);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setSelectedIds(next);
+  }
+  function toggleSelectAll() {
+    if (selectedIds.size === filtered.length) setSelectedIds(new Set());
+    else setSelectedIds(new Set(filtered.map((r) => r.id)));
+  }
+
+  function generateArchive() {
+    if (selectedIds.size === 0) return;
+    const selectedRecords = filtered.filter((r) => selectedIds.has(r.id));
+    const archiveMonth = monthFilter !== 'all' ? monthFilter : 'all';
+    const archiveItem = itemFilter !== 'all' ? TREATMENT_ITEMS.find((t) => t.code === itemFilter)?.name ?? '全部项目' : '全部项目';
+    const archiveOperator = operatorFilter !== 'all' ? operatorFilter : '全部咨询师';
+
+    const lines: string[] = [];
+    lines.push('═'.repeat(90));
+    lines.push(`知情同意书归档包  ·  生成时间：${formatDate(new Date(), 'full')}  ·  操作人：王助理`);
+    lines.push(`筛选条件：月份=${archiveMonth} / 项目=${archiveItem} / 咨询师=${archiveOperator}`);
+    lines.push(`记录数量：${selectedRecords.length} 份`);
+    lines.push('═'.repeat(90));
+    lines.push('');
+
+    selectedRecords.forEach((r, idx) => {
+      const tmpl = resolveTemplate(r.item.code, r.templateOverride);
+      const hasOverride = r.templateOverride && (r.templateOverride.riskNotice || r.templateOverride.alternatives || r.templateOverride.anesthesiaNote || r.templateOverride.postOperative);
+      lines.push(`【第 ${idx + 1} 份】` + '─'.repeat(78));
+      lines.push(`编号：${r.id.slice(-8).toUpperCase()}        状态：已签署`);
+      lines.push(`患者：${r.patient.name}    性别：${r.patient.gender}    年龄：${r.patient.age}岁`);
+      lines.push(`病历号：${r.patient.medicalRecordNo}    联系电话：${r.patient.phone}`);
+      lines.push(`就诊项目：${r.item.name}    治疗牙位：${r.toothPosition}`);
+      lines.push(`费用说明：${r.feeDescription}`);
+      lines.push(`创建时间：${formatDate(r.createdAt, 'full')}`);
+      lines.push(`签署时间：${r.signedAt ? formatDate(r.signedAt, 'full') : '—'}    咨询师：${r.operator ?? '—'}`);
+      lines.push(`模板状态：${hasOverride ? '已自定义条款' : '使用标准模板'}`);
+      if (r.signHistory && r.signHistory.length > 1) {
+        lines.push(`签署历史：首次签署 + ${r.signHistory.filter((h) => h.type === 'resign').length} 次补签`);
+      }
+      lines.push('');
+      lines.push('── 患者签名 ──');
+      lines.push(`签名数据：${r.signatureData ? '✓ 已保存签名图片' : '✗ 无签名数据'}`);
+      lines.push('');
+      lines.push(`── ${tmpl.title} 完整条款内容 ──`);
+      lines.push('');
+      lines.push('【风险告知】');
+      tmpl.riskNotice.forEach((it, i) => lines.push(`  ${i + 1}. ${it}`));
+      lines.push('');
+      lines.push('【替代方案】');
+      tmpl.alternatives.forEach((it, i) => lines.push(`  ${i + 1}. ${it}`));
+      lines.push('');
+      lines.push('【麻醉说明】');
+      tmpl.anesthesiaNote.forEach((it, i) => lines.push(`  ${i + 1}. ${it}`));
+      lines.push('');
+      lines.push('【术后注意事项】');
+      tmpl.postOperative.forEach((it, i) => lines.push(`  ${i + 1}. ${it}`));
+      lines.push('');
+      if (r.notes && r.notes.length > 0) {
+        lines.push('── 交接备注 ──');
+        r.notes.forEach((n) => {
+          lines.push(`  · [${formatDate(n.createdAt, 'datetime')}] ${n.operator}：${n.content}`);
+        });
+        lines.push('');
+      }
+      lines.push('');
+    });
+
+    lines.push('═'.repeat(90));
+    lines.push(`归档包结束  ·  共 ${selectedRecords.length} 份记录`);
+    lines.push('═'.repeat(90));
+
+    const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/plain;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const dateStr = formatDate(new Date(), 'date').replace(/-/g, '');
+    a.download = `知情同意书归档包_${archiveMonth}_${dateStr}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+
+    const pkg: ArchivePackage = {
+      id: generateId('arc'),
+      name: `${archiveMonth}_${archiveItem}_${archiveOperator}_${selectedRecords.length}份`,
+      createdAt: nowISO(),
+      createdBy: '王助理',
+      recordIds: Array.from(selectedIds),
+      filters: { month: monthFilter === 'all' ? undefined : monthFilter, itemCode: itemFilter === 'all' ? undefined : itemFilter, operator: operatorFilter === 'all' ? undefined : operatorFilter },
+    };
+    setArchivedPackages([pkg, ...archivedPackages]);
+    setSelectedIds(new Set());
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center animate-fade-in p-4 no-print" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-[1300px] max-h-[90vh] overflow-hidden animate-scale-in flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-blue-50 via-white to-indigo-50">
+          <div className="flex items-center gap-4">
+            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-blue-100 to-indigo-100 flex items-center justify-center">
+              <Archive size={22} className="text-blue-600" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                归档中心
+                <span className="text-[11px] text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200 font-medium">
+                  已签署 {signedRecords.length} 份
+                </span>
+              </h3>
+              <p className="text-xs text-gray-500 mt-0.5">
+                按月份、项目、咨询师筛选后批量生成归档包，含患者基本信息、签署时间、费用、签名及完整条款
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <button onClick={onClose} className="w-8 h-8 rounded-full hover:bg-gray-100 flex items-center justify-center text-gray-500">
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        <div className="px-6 py-3 border-b border-gray-100 bg-gray-50/50 flex items-center gap-4 flex-wrap">
+          <div className="flex items-center gap-2">
+            <Calendar size={13} className="text-gray-400" />
+            <span className="text-xs text-gray-500">月份：</span>
+            <select value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)} className="input-field w-36 py-1 text-xs">
+              <option value="all">全部月份</option>
+              {monthOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <FileCheck size={13} className="text-gray-400" />
+            <span className="text-xs text-gray-500">项目：</span>
+            <select value={itemFilter} onChange={(e) => setItemFilter(e.target.value)} className="input-field w-36 py-1 text-xs">
+              <option value="all">全部项目</option>
+              {TREATMENT_ITEMS.map((t) => <option key={t.code} value={t.code}>{t.name}</option>)}
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <Users size={13} className="text-gray-400" />
+            <span className="text-xs text-gray-500">咨询师：</span>
+            <select value={operatorFilter} onChange={(e) => setOperatorFilter(e.target.value)} className="input-field w-36 py-1 text-xs">
+              <option value="all">全部咨询师</option>
+              {operators.map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          </div>
+          <div className="flex-1" />
+          <span className="text-xs text-gray-400">筛选后共 {filtered.length} 条 · 已选 {selectedIds.size}</span>
+          <button
+            type="button"
+            onClick={generateArchive}
+            disabled={selectedIds.size === 0}
+            className="btn-primary text-xs"
+          >
+            <Package size={13} />
+            生成归档包（{selectedIds.size}）
+          </button>
+        </div>
+
+        {archivedPackages.length > 0 && (
+          <div className="px-6 py-3 border-b border-gray-100 bg-blue-50/30">
+            <div className="text-[11px] text-gray-500 mb-2 flex items-center gap-1">
+              <Package size={11} />
+              本次会话生成的归档包
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {archivedPackages.map((p) => (
+                <div key={p.id} className="bg-white rounded-lg border border-blue-100 px-3 py-1.5 text-xs flex items-center gap-2">
+                  <span className="text-blue-600 font-medium">📦</span>
+                  <span className="text-gray-700">{p.name}</span>
+                  <span className="text-gray-400">·</span>
+                  <span className="text-gray-500">{formatDate(p.createdAt, 'time')}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="flex-1 overflow-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-gray-50/80 sticky top-0 z-10">
+              <tr className="text-gray-500 text-left">
+                <th className="py-2.5 px-4 w-10">
+                  <input
+                    type="checkbox"
+                    checked={filtered.length > 0 && selectedIds.size === filtered.length}
+                    onChange={toggleSelectAll}
+                  />
+                </th>
+                <th className="py-2.5 px-3">患者</th>
+                <th className="py-2.5 px-3">项目/牙位</th>
+                <th className="py-2.5 px-3">费用</th>
+                <th className="py-2.5 px-3">咨询师</th>
+                <th className="py-2.5 px-3">签署时间</th>
+                <th className="py-2.5 px-3">模板状态</th>
+                <th className="py-2.5 px-3 text-right">操作</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {filtered.map((r) => (
+                <tr key={r.id} className="hover:bg-gray-50/50 transition-colors">
+                  <td className="py-2.5 px-4">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(r.id)}
+                      onChange={() => toggleSelect(r.id)}
+                    />
+                  </td>
+                  <td className="py-2.5 px-3">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-full bg-gradient-to-br from-primary-100 to-accent-100 text-primary-700 flex items-center justify-center font-semibold text-[11px] shrink-0">
+                        {r.patient.name.slice(0, 1)}
+                      </div>
+                      <div>
+                        <div className="text-sm font-medium text-gray-800">{r.patient.name}</div>
+                        <div className="text-[10px] text-gray-400 font-mono">{r.patient.gender}·{r.patient.age}岁 · {r.patient.medicalRecordNo}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="py-2.5 px-3">
+                    <span className="text-[11px] px-1.5 py-0.5 bg-primary-50 text-primary-600 rounded font-mono mr-1">{r.item.name}</span>
+                    <span className="text-[11px] text-gray-500">{r.toothPosition}</span>
+                  </td>
+                  <td className="py-2.5 px-3 text-gray-700 font-mono text-[11px]">{r.feeDescription}</td>
+                  <td className="py-2.5 px-3 text-gray-600 text-[11px]">{r.operator ?? '—'}</td>
+                  <td className="py-2.5 px-3 text-gray-500 text-[11px] font-mono">{r.signedAt ? formatDate(r.signedAt, 'datetime') : '—'}</td>
+                  <td className="py-2.5 px-3">
+                    {r.templateOverride && (r.templateOverride.riskNotice || r.templateOverride.alternatives || r.templateOverride.anesthesiaNote || r.templateOverride.postOperative) ? (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-600 border border-amber-200 font-medium">已自定义</span>
+                    ) : (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-50 text-gray-500 border border-gray-200 font-medium">标准模板</span>
+                    )}
+                  </td>
+                  <td className="py-2.5 px-3 text-right">
+                    <button
+                      type="button"
+                      onClick={() => onOpenDetail(r)}
+                      className="text-[11px] text-primary-600 hover:text-primary-700 flex items-center gap-1 justify-end ml-auto"
+                    >
+                      <FileSearch size={12} />
+                      查看详情 <ChevronRight size={12} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {filtered.length === 0 && (
+            <div className="text-center py-16">
+              <div className="text-5xl mb-3 opacity-40">📦</div>
+              <p className="text-gray-400 text-sm">当前筛选条件下暂无已签署记录</p>
+            </div>
+          )}
+        </div>
+
+        <div className="px-6 py-3.5 border-t border-gray-100 bg-gray-50/50 flex items-center justify-between">
+          <p className="text-[11px] text-gray-400">
+            💡 生成的归档包（TXT 格式）包含患者基本信息、签署时间、费用说明、签名状态及完整条款内容，可直接打印或存档
+          </p>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500">
+              已选择：{selectedIds.size} / {filtered.length}
+            </span>
+            <button
+              onClick={generateArchive}
+              disabled={selectedIds.size === 0}
+              className="btn-primary text-sm"
+            >
+              <Package size={14} />
+              生成归档包
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
