@@ -1,10 +1,11 @@
 import { useState, useMemo } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import { AlertTriangle, GitBranch, Syringe, Bandage, ArrowLeft, ArrowRight, CheckCircle, Home, User, FileText, MapPin, DollarSign } from 'lucide-react';
+import { AlertTriangle, GitBranch, Syringe, Bandage, ArrowLeft, ArrowRight, CheckCircle, Home, User, FileText, MapPin, DollarSign, Clock, RefreshCw, AlertCircle } from 'lucide-react';
 import StepIndicator from '@/components/StepIndicator';
 import SignaturePad from '@/components/SignaturePad';
 import { useConsentStore } from '@/store/consentStore';
-import { getTemplateByCode } from '@/data/consentTemplates';
+import { resolveTemplate } from '@/data/consentTemplates';
+import { formatDate } from '@/utils/date';
 import type { SignStepKey } from '@/types';
 
 const STEP_ORDER: SignStepKey[] = ['risk', 'alternatives', 'anesthesia', 'postOperative', 'signature'];
@@ -15,13 +16,25 @@ export default function SignPage() {
   const record = useConsentStore((s) => s.getRecord(recordId ?? ''));
   const markReading = useConsentStore((s) => s.markReading);
   const markSigned = useConsentStore((s) => s.markSigned);
+  const completeResign = useConsentStore((s) => s.completeResign);
   const updateRecord = useConsentStore((s) => s.updateRecord);
 
   const [currentStep, setCurrentStep] = useState<SignStepKey>('risk');
-  const [signature, setSignature] = useState<string | null>(record?.signatureData ?? null);
+  const [signature, setSignature] = useState<string | null>(null);
   const [showSuccess, setShowSuccess] = useState(false);
 
-  const template = useMemo(() => (record ? getTemplateByCode(record.item.code) : null), [record]);
+  const isResign = record?.status === 'resign';
+
+  const template = useMemo(
+    () => (record ? resolveTemplate(record.item.code, record.templateOverride) : null),
+    [record],
+  );
+
+  const firstSignTime = useMemo(() => {
+    if (!record?.signHistory || record.signHistory.length === 0) return null;
+    const first = record.signHistory.find((h) => h.type === 'first');
+    return first?.signedAt ?? null;
+  }, [record]);
 
   if (!record || !template) {
     return (
@@ -50,7 +63,11 @@ export default function SignPage() {
   function goNext() {
     if (currentStep === 'signature') {
       if (!signature) return;
-      markSigned(record.id, signature);
+      if (isResign) {
+        completeResign(record.id, signature, '前台');
+      } else {
+        markSigned(record.id, signature, '前台');
+      }
       setShowSuccess(true);
       setTimeout(() => navigate('/records'), 2600);
       return;
@@ -92,6 +109,40 @@ export default function SignPage() {
           </span>
         </div>
       </div>
+
+      {isResign && (
+        <section className="card p-4 mb-4 animate-fade-in border-l-4 border-l-status-resign bg-status-resign/5">
+          <div className="flex items-start gap-3">
+            <div className="shrink-0 w-9 h-9 rounded-full bg-status-resign/10 flex items-center justify-center text-status-resign">
+              <RefreshCw size={18} />
+            </div>
+            <div className="flex-1">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="font-semibold text-status-resign text-sm">补签签署</span>
+                <span className="px-2 py-0.5 text-xs rounded-full bg-status-resign/10 text-status-resign font-medium">
+                  第 {(record.signHistory?.filter((h) => h.type === 'resign').length ?? 0) + 1} 次补签
+                </span>
+              </div>
+              {record.resignReason && (
+                <div className="text-sm text-gray-700 mb-2">
+                  <span className="text-gray-500">补签原因：</span>
+                  <span className="font-medium">{record.resignReason}</span>
+                </div>
+              )}
+              {firstSignTime && (
+                <div className="text-xs text-gray-500 flex items-center gap-1">
+                  <Clock size={12} />
+                  首次签署时间：{formatDate(firstSignTime, 'full')}
+                </div>
+              )}
+            </div>
+            <div className="shrink-0 text-xs text-gray-400 bg-white px-2.5 py-1 rounded-lg border border-gray-100">
+              <AlertCircle size={12} className="inline mr-1 text-status-resign" />
+              请患者重新阅读并签署
+            </div>
+          </div>
+        </section>
+      )}
 
       <section className="card p-5 mb-5 animate-fade-in">
         <div className="flex items-center gap-6 flex-wrap">
@@ -212,8 +263,12 @@ export default function SignPage() {
                 <CheckCircle size={42} strokeWidth={2.5} />
               </div>
             </div>
-            <h3 className="text-xl font-bold text-gray-800 mb-2">签署完成 ✨</h3>
-            <p className="text-sm text-gray-500 mb-1">患者 {record.patient.name} 的知情同意书已成功签署</p>
+            <h3 className="text-xl font-bold text-gray-800 mb-2">
+              {isResign ? '补签完成 ✨' : '签署完成 ✨'}
+            </h3>
+            <p className="text-sm text-gray-500 mb-1">
+              患者 {record.patient.name} 的知情同意书已{isResign ? '补签' : '签署'}
+            </p>
             <p className="text-xs text-gray-400 mb-5">正在跳转至签署记录页...</p>
             <div className="w-full h-1.5 rounded-full bg-gray-100 overflow-hidden">
               <div className="h-full bg-gradient-to-r from-primary-400 to-accent-400 animate-[scale-in_2.6s_ease-out]" style={{ width: '100%', transformOrigin: 'left' }} />

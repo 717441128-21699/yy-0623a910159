@@ -1,4 +1,4 @@
-import type { ConsentTemplateContent } from '@/types';
+import type { ConsentTemplateContent, TemplateOverride } from '@/types';
 
 export const CONSENT_TEMPLATES: Record<string, ConsentTemplateContent> = {
   IMPLANT: {
@@ -246,4 +246,24 @@ export function getTemplateByCode(code: string): ConsentTemplateContent {
     anesthesiaNote: ['常规局部麻醉，如有特殊病史请提前告知。'],
     postOperative: ['请遵医嘱，不适随诊。'],
   };
+}
+
+export function resolveTemplate(
+  code: string,
+  override?: TemplateOverride,
+): ConsentTemplateContent {
+  const base = getTemplateByCode(code);
+  if (!override) return base;
+  return {
+    title: base.title,
+    riskNotice: override.riskNotice ?? base.riskNotice,
+    alternatives: override.alternatives ?? base.alternatives,
+    anesthesiaNote: override.anesthesiaNote ?? base.anesthesiaNote,
+    postOperative: override.postOperative ?? base.postOperative,
+  };
+}
+
+export function hasOverride(override?: TemplateOverride): boolean {
+  if (!override) return false;
+  return !!(override.riskNotice || override.alternatives || override.anesthesiaNote || override.postOperative);
 }

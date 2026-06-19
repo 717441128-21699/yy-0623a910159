@@ -3,6 +3,7 @@ import Layout from '@/components/Layout';
 import PatientInfoPage from '@/pages/PatientInfoPage';
 import SignPage from '@/pages/SignPage';
 import RecordsPage from '@/pages/RecordsPage';
+import TemplatesPage from '@/pages/TemplatesPage';
 
 export default function App() {
   return (
@@ -11,8 +12,7 @@ export default function App() {
         <Route element={<Layout />}>
           <Route path="/" element={<PatientInfoPage />} />
           <Route path="/records" element={<RecordsPage />} />
-        </Route>
-        <Route element={<Layout />}>
+          <Route path="/templates" element={<TemplatesPage />} />
           <Route path="/sign/:recordId" element={<SignPage />} />
         </Route>
         <Route path="*" element={<Layout />} />

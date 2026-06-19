@@ -1,5 +1,5 @@
 import { AlertTriangle, GitBranch, Syringe, Bandage, User, Hash, MapPin, DollarSign } from 'lucide-react';
-import type { Patient, TreatmentItem } from '@/types';
+import type { ConsentTemplateContent, Patient, TreatmentItem } from '@/types';
 import { getTemplateByCode } from '@/data/consentTemplates';
 
 interface Props {
@@ -8,10 +8,15 @@ interface Props {
   toothPosition: string;
   feeDescription: string;
   compact?: boolean;
+  template?: ConsentTemplateContent | null;
+  showId?: string;
 }
 
-export default function ConsentPreview({ patient, item, toothPosition, feeDescription, compact = false }: Props) {
-  const template = item ? getTemplateByCode(item.code) : null;
+export default function ConsentPreview({
+  patient, item, toothPosition, feeDescription,
+  compact = false, template: templateProp, showId,
+}: Props) {
+  const template = templateProp ?? (item ? getTemplateByCode(item.code) : null);
 
   return (
     <div className={`${compact ? '' : 'paper-a4 animate-scale-in'} bg-white`} style={compact ? {} : undefined}>
@@ -21,7 +26,9 @@ export default function ConsentPreview({ patient, item, toothPosition, feeDescri
           <h1 className="text-2xl font-bold text-gray-800">
             {template ? template.title : '请选择就诊项目'}
           </h1>
-          <div className="mt-2 text-xs text-gray-500">编号：DIC-{new Date().getFullYear()}-{String(Math.floor(Math.random() * 90000) + 10000)}</div>
+          <div className="mt-2 text-xs text-gray-500">
+            编号：DIC-{new Date().getFullYear()}-{showId ?? String(Math.floor(Math.random() * 90000) + 10000)}
+          </div>
         </div>
       )}
 

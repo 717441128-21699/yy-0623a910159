@@ -1,9 +1,10 @@
 import { NavLink, useLocation } from 'react-router-dom';
-import { FileUser, PenLine, ClipboardList, Stethoscope } from 'lucide-react';
+import { FileUser, PenLine, ClipboardList, Stethoscope, BookOpen } from 'lucide-react';
 
 const NAV = [
   { to: '/', label: '患者信息', icon: FileUser },
   { to: '/records', label: '签署记录', icon: ClipboardList },
+  { to: '/templates', label: '模板管理', icon: BookOpen },
 ];
 
 export default function Navbar() {
