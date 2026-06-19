@@ -1,0 +1,68 @@
+import type { TreatmentItem } from '@/types';
+
+export const TREATMENT_ITEMS: TreatmentItem[] = [
+  {
+    id: 'implant',
+    name: '种植牙',
+    code: 'IMPLANT',
+    icon: 'Flower2',
+    description: '人工牙根植入牙槽骨，修复缺失牙齿',
+    defaultFee: '8,000 - 18,000 元/颗（含种植体、基台、牙冠）',
+  },
+  {
+    id: 'extraction',
+    name: '拔牙',
+    code: 'EXTRACTION',
+    icon: 'Scissors',
+    description: '拔除无法保留的患牙或阻生智齿',
+    defaultFee: '200 - 1,500 元（根据牙齿位置和难度）',
+  },
+  {
+    id: 'root-canal',
+    name: '根管治疗',
+    code: 'ROOT_CANAL',
+    icon: 'CircleDot',
+    description: '清除感染牙髓，保留天然牙齿',
+    defaultFee: '800 - 2,500 元/颗（根据牙根数量）',
+  },
+  {
+    id: 'orthodontics',
+    name: '正畸矫正',
+    code: 'ORTHODONTICS',
+    icon: 'Grid3x3',
+    description: '通过矫治器排齐牙齿，改善咬合关系',
+    defaultFee: '15,000 - 45,000 元（根据矫治器类型）',
+  },
+  {
+    id: 'filling',
+    name: '补牙',
+    code: 'FILLING',
+    icon: 'ShieldCheck',
+    description: '去除龋坏组织，用充填材料恢复牙体外形',
+    defaultFee: '200 - 800 元/颗（根据充填材料）',
+  },
+  {
+    id: 'cleaning',
+    name: '洗牙洁治',
+    code: 'CLEANING',
+    icon: 'Sparkles',
+    description: '去除牙石、牙菌斑，预防牙周疾病',
+    defaultFee: '200 - 500 元/次',
+  },
+  {
+    id: 'crown',
+    name: '牙冠修复',
+    code: 'CROWN',
+    icon: 'Crown',
+    description: '套冠保护根管治疗后或大面积缺损的牙齿',
+    defaultFee: '1,500 - 6,000 元/颗（根据材料）',
+  },
+  {
+    id: 'periodontal',
+    name: '牙周治疗',
+    code: 'PERIODONTAL',
+    icon: 'HeartPulse',
+    description: '龈下刮治、根面平整等牙周系统治疗',
+    defaultFee: '1,000 - 4,000 元/疗程',
+  },
+];
