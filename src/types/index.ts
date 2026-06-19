@@ -27,6 +27,14 @@ export interface TemplateOverride {
   postOperative?: string[];
 }
 
+export interface SignSnapshot {
+  patient: Patient;
+  item: TreatmentItem;
+  toothPosition: string;
+  feeDescription: string;
+  templateOverride?: TemplateOverride;
+}
+
 export interface SignHistory {
   id: string;
   type: 'first' | 'resign';
@@ -34,6 +42,24 @@ export interface SignHistory {
   signatureData: string;
   operator?: string;
   reason?: string;
+  snapshot?: SignSnapshot;
+}
+
+export interface RecordNote {
+  id: string;
+  content: string;
+  operator: string;
+  createdAt: string;
+}
+
+export type FollowUpStatus = 'pending' | 'called' | 'onsite' | 'completed';
+
+export interface FollowUp {
+  id: string;
+  status: FollowUpStatus;
+  operator: string;
+  remark?: string;
+  updatedAt: string;
 }
 
 export interface ConsentRecord {
@@ -56,6 +82,9 @@ export interface ConsentRecord {
   templateOverride?: TemplateOverride;
   signHistory?: SignHistory[];
   resignReason?: string;
+  notes?: RecordNote[];
+  followUp?: FollowUp;
+  operator?: string;
 }
 
 export interface ConsentTemplateContent {

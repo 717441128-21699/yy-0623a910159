@@ -1,9 +1,9 @@
 import { create } from 'zustand';
-import type { ConsentRecord, ConsentStatus, Patient, TemplateOverride, TreatmentItem } from '@/types';
+import type { ConsentRecord, ConsentStatus, FollowUpStatus, Patient, TemplateOverride, TreatmentItem } from '@/types';
 import { generateId } from '@/utils/id';
 import { nowISO } from '@/utils/date';
 
-const STORAGE_KEY = 'dental-consent-records-v2';
+const STORAGE_KEY = 'dental-consent-records-v3';
 
 function loadFromStorage(): ConsentRecord[] {
   try {
@@ -33,6 +33,7 @@ interface ConsentState {
     feeDescription: string;
     feeEditedByUser?: boolean;
     templateOverride?: TemplateOverride;
+    operator?: string;
   }) => ConsentRecord;
 
   getRecord: (id: string) => ConsentRecord | undefined;
@@ -52,6 +53,10 @@ interface ConsentState {
   setTemplateOverride: (id: string, override: TemplateOverride) => void;
 
   resetReadings: (id: string) => void;
+
+  addNote: (id: string, content: string, operator: string) => void;
+
+  setFollowUp: (id: string, status: FollowUpStatus, operator: string, remark?: string) => void;
 
   seedDemoData: () => void;
 }
@@ -74,6 +79,8 @@ export const useConsentStore = create<ConsentState>((set, get) => ({
       readings: { risk: false, alternatives: false, anesthesia: false, postOperative: false },
       templateOverride: data.templateOverride,
       signHistory: [],
+      notes: [],
+      operator: data.operator,
     };
     const records = [record, ...get().records];
     saveToStorage(records);
@@ -100,6 +107,13 @@ export const useConsentStore = create<ConsentState>((set, get) => ({
           signedAt: nowISO(),
           signatureData,
           operator,
+          snapshot: {
+            patient: { ...r.patient },
+            item: { ...r.item },
+            toothPosition: r.toothPosition,
+            feeDescription: r.feeDescription,
+            templateOverride: r.templateOverride ? { ...r.templateOverride } : undefined,
+          },
         });
       }
       return {
@@ -108,6 +122,7 @@ export const useConsentStore = create<ConsentState>((set, get) => ({
         signatureData,
         signedAt: nowISO(),
         signHistory: history,
+        operator: operator ?? r.operator,
       };
     });
     saveToStorage(records);
@@ -140,6 +155,13 @@ export const useConsentStore = create<ConsentState>((set, get) => ({
         signatureData,
         operator,
         reason: r.resignReason,
+        snapshot: {
+          patient: { ...r.patient },
+          item: { ...r.item },
+          toothPosition: r.toothPosition,
+          feeDescription: r.feeDescription,
+          templateOverride: r.templateOverride ? { ...r.templateOverride } : undefined,
+        },
       });
       return {
         ...r,
@@ -180,6 +202,42 @@ export const useConsentStore = create<ConsentState>((set, get) => ({
         ? { ...r, readings: { risk: false, alternatives: false, anesthesia: false, postOperative: false } }
         : r,
     );
+    saveToStorage(records);
+    set({ records });
+  },
+
+  addNote: (id, content, operator) => {
+    const records = get().records.map((r) => {
+      if (r.id !== id) return r;
+      const note = {
+        id: generateId('n'),
+        content,
+        operator,
+        createdAt: nowISO(),
+      };
+      return {
+        ...r,
+        notes: [...(r.notes ?? []), note],
+      };
+    });
+    saveToStorage(records);
+    set({ records });
+  },
+
+  setFollowUp: (id, status, operator, remark) => {
+    const records = get().records.map((r) => {
+      if (r.id !== id) return r;
+      return {
+        ...r,
+        followUp: {
+          id: generateId('f'),
+          status,
+          operator,
+          remark,
+          updatedAt: nowISO(),
+        },
+      };
+    });
     saveToStorage(records);
     set({ records });
   },

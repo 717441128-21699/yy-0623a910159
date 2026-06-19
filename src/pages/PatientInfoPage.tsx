@@ -2,15 +2,18 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   User, Hash, Phone, MapPin, DollarSign, RefreshCw, Save, ArrowRight, Sparkles,
-  FileText, Edit3, Check, X, AlertCircle, ChevronDown,
+  FileText, Edit3, Check, X, AlertCircle, ChevronDown, Users, MessageSquare, Send, Clock,
 } from 'lucide-react';
 import { TREATMENT_ITEMS } from '@/data/treatmentItems';
 import { getTemplateByCode, hasOverride, resolveTemplate } from '@/data/consentTemplates';
 import { generateId, generateMedicalRecordNo } from '@/utils/id';
+import { formatDate } from '@/utils/date';
 import TreatmentCard from '@/components/TreatmentCard';
 import ConsentPreview from '@/components/ConsentPreview';
 import { useConsentStore } from '@/store/consentStore';
-import type { Gender, Patient, TemplateOverride, TreatmentItem } from '@/types';
+import type { Gender, Patient, RecordNote, TemplateOverride, TreatmentItem } from '@/types';
+
+const OPERATORS = ['王助理', '李咨询师', '张医生', '刘主任', '陈护士'];
 
 const emptyPatient: Patient = {
   id: '',
@@ -35,6 +38,9 @@ export default function PatientInfoPage() {
   const [feeDescription, setFeeDescription] = useState('');
   const [feeEditedByUser, setFeeEditedByUser] = useState(false);
   const [toast, setToast] = useState<Toast>(null);
+  const [operator, setOperator] = useState('王助理');
+  const [notes, setNotes] = useState<RecordNote[]>([]);
+  const [noteContent, setNoteContent] = useState('');
 
   const [feeConfirm, setFeeConfirm] = useState<{ newItem: TreatmentItem } | null>(null);
   const [templateEditorOpen, setTemplateEditorOpen] = useState(false);
@@ -107,7 +113,23 @@ export default function PatientInfoPage() {
     setFeeDescription('');
     setFeeEditedByUser(false);
     setTemplateOverride({});
+    setNotes([]);
+    setNoteContent('');
+    setOperator('王助理');
     showToast('info', '表单已重置');
+  }
+
+  function handleAddNote() {
+    if (!noteContent.trim()) return;
+    const newNote: RecordNote = {
+      id: generateId('n'),
+      content: noteContent.trim(),
+      operator,
+      createdAt: new Date().toISOString(),
+    };
+    setNotes([...notes, newNote]);
+    setNoteContent('');
+    showToast('success', '备注已添加');
   }
 
   function validate(): string | null {
@@ -132,14 +154,22 @@ export default function PatientInfoPage() {
 
   function createRecord() {
     const p: Patient = patient.id ? patient : { ...patient, id: generateId('p') };
-    return addRecord({
+    const record = addRecord({
       patient: p,
       item: selectedItem!,
       toothPosition,
       feeDescription,
       feeEditedByUser,
       templateOverride: isTemplateEdited ? templateOverride : undefined,
+      operator,
     });
+    if (notes.length > 0) {
+      const addNote = useConsentStore.getState().addNote;
+      notes.forEach((n) => {
+        addNote(record.id, n.content, n.operator);
+      });
+    }
+    return record;
   }
 
   function goSign() {
@@ -243,6 +273,26 @@ export default function PatientInfoPage() {
                   </div>
                 </FormField>
               </div>
+              <div className="col-span-2">
+                <FormField label="咨询师/操作人" icon={<Users size={14} />}>
+                  <div className="grid grid-cols-5 gap-2">
+                    {OPERATORS.map((op) => (
+                      <button
+                        key={op}
+                        type="button"
+                        onClick={() => setOperator(op)}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                          operator === op
+                            ? 'bg-primary-500 text-white shadow-sm'
+                            : 'bg-gray-50 text-gray-600 hover:bg-gray-100 border border-gray-200'
+                        }`}
+                      >
+                        {op}
+                      </button>
+                    ))}
+                  </div>
+                </FormField>
+              </div>
             </div>
           </section>
 
@@ -276,6 +326,47 @@ export default function PatientInfoPage() {
                   onClick={() => handleSelectItem(item)}
                 />
               ))}
+            </div>
+          </section>
+
+          <section className="card p-5 animate-fade-in">
+            <h3 className="text-base font-semibold text-gray-800 mb-4 pb-3 border-b border-gray-100 flex items-center gap-2">
+              <span className="w-1 h-5 rounded bg-accent-500" />
+              交接备注
+              <span className="text-[10px] text-gray-400 font-normal">（{notes.length} 条）</span>
+            </h3>
+            {notes.length > 0 && (
+              <div className="space-y-2.5 mb-3 max-h-[140px] overflow-auto pr-1">
+                {notes.map((n) => (
+                  <div key={n.id} className="bg-gray-50 rounded-lg p-2.5 border border-gray-100">
+                    <div className="text-[11px] text-gray-500 flex items-center justify-between mb-1">
+                      <span className="font-medium text-accent-600">{n.operator}</span>
+                      <span className="text-[10px] flex items-center gap-1">
+                        <Clock size={10} />
+                        {formatDate(n.createdAt, 'datetime')}
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-700 leading-relaxed">{n.content}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <textarea
+                rows={2}
+                className="input-field resize-none text-xs flex-1"
+                placeholder="添加交接备注，如患者特殊情况、沟通要点等（将随记录保存）"
+                value={noteContent}
+                onChange={(e) => setNoteContent(e.target.value)}
+              />
+              <button
+                type="button"
+                onClick={handleAddNote}
+                disabled={!noteContent.trim()}
+                className="btn-primary px-3 self-end"
+              >
+                <Send size={13} />
+              </button>
             </div>
           </section>
 

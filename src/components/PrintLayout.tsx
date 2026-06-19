@@ -1,4 +1,4 @@
-import { getTemplateByCode } from '@/data/consentTemplates';
+import { resolveTemplate } from '@/data/consentTemplates';
 import { formatDate } from '@/utils/date';
 import type { ConsentRecord } from '@/types';
 
@@ -7,7 +7,13 @@ interface Props {
 }
 
 export default function PrintLayout({ record }: Props) {
-  const template = getTemplateByCode(record.item.code);
+  const template = resolveTemplate(record.item.code, record.templateOverride);
+  const hasOverride = record.templateOverride && (
+    record.templateOverride.riskNotice ||
+    record.templateOverride.alternatives ||
+    record.templateOverride.anesthesiaNote ||
+    record.templateOverride.postOperative
+  );
   return (
     <div className="print-area min-h-screen bg-white">
       <div className="paper-a4 mx-auto my-10" style={{ width: '210mm' }}>
@@ -17,7 +23,14 @@ export default function PrintLayout({ record }: Props) {
 
         <div className="text-center pb-5 border-b-2 border-gray-800 mb-6">
           <div className="text-[11px] tracking-[0.3em] text-gray-500 mb-1">YAKANG DENTAL CLINIC · INFORMED CONSENT</div>
-          <h1 className="text-[26px] font-bold text-gray-900 mb-1">{template.title}</h1>
+          <h1 className="text-[26px] font-bold text-gray-900 mb-1 flex items-center justify-center gap-2">
+            {template.title}
+            {hasOverride && (
+              <span className="text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 font-normal">
+                已自定义条款
+              </span>
+            )}
+          </h1>
           <div className="text-xs text-gray-500">编号：DIC-{new Date(record.createdAt).getFullYear()}-{record.id.slice(-6).toUpperCase()}</div>
         </div>
 

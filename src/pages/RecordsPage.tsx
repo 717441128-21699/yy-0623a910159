@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Search, Calendar, Eye, Printer, RotateCcw, FileCheck, FileX, FileClock,
   Hash, ChevronDown, X, Download, Filter, AlertCircle, History, User, Clock,
+  MessageSquare, Send, Phone, Users, CheckCircle2, ClipboardList, Layers,
 } from 'lucide-react';
 import StatusBadge from '@/components/StatusBadge';
 import { useConsentStore } from '@/store/consentStore';
@@ -10,7 +11,7 @@ import { formatDate } from '@/utils/date';
 import { resolveTemplate } from '@/data/consentTemplates';
 import { TREATMENT_ITEMS } from '@/data/treatmentItems';
 import PrintLayout from '@/components/PrintLayout';
-import type { ConsentRecord, ConsentStatus } from '@/types';
+import type { ConsentRecord, ConsentStatus, SignHistory } from '@/types';
 
 type FilterKey = 'all' | ConsentStatus;
 
@@ -35,6 +36,8 @@ export default function RecordsPage() {
   const records = useConsentStore((s) => s.records);
   const setStatus = useConsentStore((s) => s.setStatus);
   const requestResign = useConsentStore((s) => s.requestResign);
+  const setFollowUp = useConsentStore((s) => s.setFollowUp);
+  const addNote = useConsentStore((s) => s.addNote);
 
   const [filter, setFilter] = useState<FilterKey>('all');
   const [keyword, setKeyword] = useState('');
@@ -45,6 +48,8 @@ export default function RecordsPage() {
   const [resignModal, setResignModal] = useState<{ record: ConsentRecord } | null>(null);
   const [resignReason, setResignReason] = useState('');
   const [resignPreset, setResignPreset] = useState('');
+  const [showCheckPanel, setShowCheckPanel] = useState(false);
+  const [checkRemark, setCheckRemark] = useState('');
 
   const counts = useMemo(() => ({
     all: records.length,
@@ -101,7 +106,13 @@ export default function RecordsPage() {
     const t = d.getTime();
     const todays = records.filter((r) => new Date(r.createdAt).getTime() >= t);
 
-    const header = '编号,患者姓名,性别,年龄,病历号,联系电话,就诊项目,治疗牙位,费用说明,状态,创建时间,签署时间,补签次数';
+    const hasOverride = (r: ConsentRecord) => {
+      if (!r.templateOverride) return '否';
+      const o = r.templateOverride;
+      return (o.riskNotice || o.alternatives || o.anesthesiaNote || o.postOperative) ? '是' : '否';
+    };
+
+    const header = '编号,患者姓名,性别,年龄,病历号,联系电话,就诊项目,治疗牙位,费用说明,状态,是否自定义模板,咨询师,创建时间,签署时间,补签次数,跟进状态';
     const rows = todays.map((r) => [
       r.id.slice(-8).toUpperCase(),
       r.patient.name,
@@ -113,9 +124,15 @@ export default function RecordsPage() {
       r.toothPosition,
       r.feeDescription,
       r.status === 'pending' ? '未签署' : r.status === 'signed' ? '已签署' : '需补签',
+      hasOverride(r),
+      r.operator ?? '',
       formatDate(r.createdAt, 'full'),
       r.signedAt ? formatDate(r.signedAt, 'full') : '',
       (r.signHistory?.filter((h) => h.type === 'resign').length ?? 0),
+      r.followUp ? (
+        r.followUp.status === 'called' ? '已电话提醒' :
+        r.followUp.status === 'onsite' ? '已现场处理' : '已完成'
+      ) : '',
     ].map((v) => `"${String(v).replace(/"/g, '""')}"`).join(','));
 
     const csv = '\ufeff' + [header, ...rows].join('\n');
@@ -179,11 +196,22 @@ export default function RecordsPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-4 mb-5 animate-fade-in">
+      <div className="grid grid-cols-4 gap-4 mb-4 animate-fade-in">
         <StatTile label="今日总数" value={todayStats.total} color="text-primary-600" bg="from-primary-50 to-white" icon="📋" />
         <StatTile label="今日未签" value={todayStats.pending} color="text-status-pending" bg="from-orange-50 to-white" icon="⏳" />
         <StatTile label="今日已签" value={todayStats.signed} color="text-status-signed" bg="from-green-50 to-white" icon="✅" />
         <StatTile label="今日需补签" value={todayStats.resign} color="text-status-resign" bg="from-red-50 to-white" icon="🔄" />
+      </div>
+
+      <div className="flex justify-end mb-4 animate-fade-in">
+        <button
+          type="button"
+          onClick={() => setShowCheckPanel(true)}
+          className="btn-outline text-sm"
+        >
+          <ClipboardList size={14} />
+          今日漏签核对面板
+        </button>
       </div>
 
       <div className="card mb-5 animate-fade-in overflow-hidden">
@@ -372,6 +400,21 @@ export default function RecordsPage() {
             }
           }}
           onPrint={handlePrint}
+          onAddNote={(id, content) => addNote(id, content, '王助理')}
+        />
+      )}
+
+      {showCheckPanel && (
+        <CheckPanel
+          records={records}
+          onClose={() => setShowCheckPanel(false)}
+          onMarkFollowUp={(id, status, remark) => {
+            setFollowUp(id, status, '王助理', remark);
+          }}
+          onOpenDetail={(r) => {
+            setShowCheckPanel(false);
+            setDetail(r);
+          }}
         />
       )}
 
@@ -476,22 +519,78 @@ function StatTile({ label, value, color, bg, icon }: { label: string; value: num
 }
 
 function DetailModal({
-  record, onClose, onSign, onPrint,
+  record, onClose, onSign, onPrint, onAddNote,
 }: {
   record: ConsentRecord;
   onClose: () => void;
   onSign: (r: ConsentRecord) => void;
   onPrint: (r: ConsentRecord) => void;
+  onAddNote: (id: string, content: string) => void;
 }) {
-  const template = resolveTemplate(record.item.code, record.templateOverride);
+  const [activeVersion, setActiveVersion] = useState<'current' | number>('current');
+  const [noteContent, setNoteContent] = useState('');
+
+  const signHistory = record.signHistory ?? [];
+  const resignCount = signHistory.filter((h) => h.type === 'resign').length;
+
+  const versionData = useMemo(() => {
+    if (activeVersion === 'current') {
+      return {
+        label: '当前最新',
+        patient: record.patient,
+        item: record.item,
+        toothPosition: record.toothPosition,
+        feeDescription: record.feeDescription,
+        templateOverride: record.templateOverride,
+        signatureData: record.signatureData,
+        signedAt: record.signedAt,
+        isResign: false,
+        reason: undefined,
+      };
+    }
+    const h = signHistory[activeVersion];
+    if (!h) return null;
+    const snapshot = h.snapshot;
+    return {
+      label: h.type === 'first' ? '首次签署' : `第 ${signHistory.slice(0, activeVersion + 1).filter(x => x.type === 'resign').length} 次补签`,
+      patient: snapshot?.patient ?? record.patient,
+      item: snapshot?.item ?? record.item,
+      toothPosition: snapshot?.toothPosition ?? record.toothPosition,
+      feeDescription: snapshot?.feeDescription ?? record.feeDescription,
+      templateOverride: snapshot?.templateOverride,
+      signatureData: h.signatureData,
+      signedAt: h.signedAt,
+      isResign: h.type === 'resign',
+      reason: h.reason,
+    };
+  }, [activeVersion, signHistory, record]);
+
+  const template = versionData
+    ? resolveTemplate(versionData.item.code, versionData.templateOverride)
+    : resolveTemplate(record.item.code, record.templateOverride);
+
   const allRead = record.readings.risk && record.readings.alternatives && record.readings.anesthesia && record.readings.postOperative;
-  const resignCount = record.signHistory?.filter((h) => h.type === 'resign').length ?? 0;
-  const firstSign = record.signHistory?.find((h) => h.type === 'first');
-  const resignRecords = record.signHistory?.filter((h) => h.type === 'resign') ?? [];
+  const notes = record.notes ?? [];
+
+  function handleAddNote() {
+    if (!noteContent.trim()) return;
+    onAddNote(record.id, noteContent.trim());
+    setNoteContent('');
+  }
+
+  const versionTabs = [
+    { key: 'current' as const, label: '当前最新', hasSnapshot: false },
+    ...signHistory.map((h, i) => ({
+      key: i as number,
+      label: h.type === 'first' ? '首次签署' : `补签 ${signHistory.slice(0, i + 1).filter(x => x.type === 'resign').length}`,
+      hasSnapshot: !!h.snapshot,
+      time: h.signedAt,
+    })),
+  ];
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center animate-fade-in p-4 no-print" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl w-[1100px] max-h-[90vh] overflow-hidden animate-scale-in flex flex-col" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white rounded-2xl shadow-2xl w-[1200px] max-h-[90vh] overflow-hidden animate-scale-in flex flex-col" onClick={(e) => e.stopPropagation()}>
         <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-primary-50 via-white to-accent-50">
           <div className="flex items-center gap-4">
             <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-primary-100 to-accent-100 flex items-center justify-center text-2xl">
@@ -519,19 +618,68 @@ function DetailModal({
           </div>
         </div>
 
+        {signHistory.length > 0 && (
+          <div className="px-6 py-3 border-b border-gray-100 bg-gray-50/50">
+            <div className="flex items-center gap-2 mb-1.5">
+              <Layers size={13} className="text-gray-400" />
+              <span className="text-xs font-medium text-gray-600">签署版本视图</span>
+              <span className="text-[10px] text-gray-400">（点击切换查看不同版本的内容）</span>
+            </div>
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+              {versionTabs.map((tab) => {
+                const isActive = activeVersion === tab.key;
+                return (
+                  <button
+                    key={String(tab.key)}
+                    type="button"
+                    onClick={() => setActiveVersion(tab.key as any)}
+                    className={`shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 ${
+                      isActive
+                        ? 'bg-primary-500 text-white shadow-sm'
+                        : 'bg-white text-gray-600 border border-gray-200 hover:border-primary-300 hover:text-primary-600'
+                    }`}
+                  >
+                    {tab.label}
+                    {tab.hasSnapshot && (
+                      <span className={`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-white/70' : 'bg-status-signed'}`} />
+                    )}
+                    {'time' in tab && tab.time && (
+                      <span className={`ml-0.5 ${isActive ? 'text-white/70' : 'text-gray-400'}`}>
+                        {formatDate(tab.time, 'time')}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div className="flex-1 overflow-auto p-6 grid grid-cols-12 gap-6">
           <div className="col-span-4 space-y-4">
             <div className="card p-4">
               <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
                 <User size={14} className="text-primary-500" />
                 患者信息
+                {versionData?.isResign && (
+                  <span className="text-[10px] text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded border border-orange-200">补签版本</span>
+                )}
               </h4>
               <dl className="text-sm space-y-1.5">
-                <InfoRow label="姓名" value={record.patient.name} />
-                <InfoRow label="性别/年龄" value={`${record.patient.gender} / ${record.patient.age} 岁`} />
-                <InfoRow label="病历号" value={record.patient.medicalRecordNo} mono />
-                <InfoRow label="联系电话" value={record.patient.phone} mono />
+                <InfoRow label="姓名" value={versionData?.patient.name ?? record.patient.name} />
+                <InfoRow label="性别/年龄" value={`${versionData?.patient.gender ?? record.patient.gender} / ${versionData?.patient.age ?? record.patient.age} 岁`} />
+                <InfoRow label="病历号" value={versionData?.patient.medicalRecordNo ?? record.patient.medicalRecordNo} mono />
+                <InfoRow label="联系电话" value={versionData?.patient.phone ?? record.patient.phone} mono />
+                <InfoRow label="就诊项目" value={versionData?.item.name ?? record.item.name} />
+                <InfoRow label="治疗牙位" value={versionData?.toothPosition ?? record.toothPosition} />
+                <InfoRow label="费用说明" value={versionData?.feeDescription ?? record.feeDescription} />
               </dl>
+              {versionData?.reason && (
+                <div className="mt-3 pt-3 border-t border-gray-100">
+                  <div className="text-[11px] text-gray-500 mb-1">补签原因：</div>
+                  <p className="text-xs text-gray-600 bg-orange-50 p-2 rounded border border-orange-100">{versionData.reason}</p>
+                </div>
+              )}
             </div>
 
             <div className="card p-4">
@@ -553,60 +701,59 @@ function DetailModal({
               </div>
             </div>
 
-            {record.signatureData && (
+            {versionData?.signatureData && (
               <div className="card p-4">
-                <h4 className="text-sm font-semibold text-gray-700 mb-3">当前签名</h4>
+                <h4 className="text-sm font-semibold text-gray-700 mb-3">
+                  {activeVersion === 'current' ? '当前签名' : '版本签名'}
+                </h4>
                 <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
-                  <img src={record.signatureData} alt="签名" className="max-h-24 w-full object-contain" />
+                  <img src={versionData.signatureData} alt="签名" className="max-h-24 w-full object-contain" />
                   <div className="mt-2 text-[11px] text-gray-500 text-right">
-                    签署时间：{formatDate(record.signedAt)}
+                    签署时间：{formatDate(versionData.signedAt)}
                   </div>
                 </div>
               </div>
             )}
 
-            {record.resignReason && (
-              <div className="card p-4 border-status-resign/30">
-                <h4 className="text-sm font-semibold text-status-resign mb-2 flex items-center gap-2">
-                  <AlertCircle size={14} />
-                  补签原因
-                </h4>
-                <p className="text-xs text-gray-600 bg-red-50 p-2.5 rounded-lg border border-red-100">
-                  {record.resignReason}
-                </p>
-              </div>
-            )}
-
-            {resignRecords.length > 0 && (
-              <div className="card p-4">
-                <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                  <History size={14} className="text-primary-500" />
-                  签署历史
-                </h4>
-                <div className="space-y-3">
-                  {firstSign && (
-                    <HistoryItem
-                      type="首次签署"
-                      typeColor="text-gray-600 bg-gray-100"
-                      time={firstSign.signedAt}
-                      operator={firstSign.operator}
-                      signature={firstSign.signatureData}
-                    />
-                  )}
-                  {resignRecords.map((h, i) => (
-                    <HistoryItem
-                      key={h.id}
-                      type={`第 ${i + 1} 次补签`}
-                      typeColor="text-orange-700 bg-orange-100"
-                      time={h.signedAt}
-                      operator={h.operator}
-                      reason={h.reason}
-                      signature={h.signatureData}
-                    />
+            <div className="card p-4">
+              <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                <MessageSquare size={14} className="text-primary-500" />
+                交接备注
+                <span className="text-[10px] text-gray-400 font-normal">（共 {notes.length} 条）</span>
+              </h4>
+              {notes.length === 0 ? (
+                <p className="text-xs text-gray-400 text-center py-3">暂无交接备注</p>
+              ) : (
+                <div className="space-y-2.5 max-h-[200px] overflow-auto pr-1 mb-3">
+                  {notes.map((n) => (
+                    <div key={n.id} className="bg-gray-50 rounded-lg p-2.5 border border-gray-100">
+                      <div className="text-[11px] text-gray-500 flex items-center justify-between mb-1">
+                        <span className="font-medium text-primary-600">{n.operator}</span>
+                        <span className="text-[10px]">{formatDate(n.createdAt, 'datetime')}</span>
+                      </div>
+                      <p className="text-xs text-gray-700 leading-relaxed">{n.content}</p>
+                    </div>
                   ))}
                 </div>
+              )}
+              <div className="flex gap-2">
+                <textarea
+                  rows={2}
+                  className="input-field resize-none text-xs flex-1"
+                  placeholder="输入交接备注内容..."
+                  value={noteContent}
+                  onChange={(e) => setNoteContent(e.target.value)}
+                />
+                <button
+                  type="button"
+                  onClick={handleAddNote}
+                  disabled={!noteContent.trim()}
+                  className="btn-primary px-3 self-end"
+                >
+                  <Send size={13} />
+                </button>
               </div>
-            )}
+            </div>
           </div>
 
           <div className="col-span-8">
@@ -614,13 +761,18 @@ function DetailModal({
               <div className="flex items-center justify-between mb-3">
                 <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
                   📄 同意书内容
-                  {record.templateOverride && (
+                  {versionData?.templateOverride && (
                     <span className="text-[10px] text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 font-normal">
                       已自定义
                     </span>
                   )}
+                  {activeVersion !== 'current' && (
+                    <span className="text-[10px] text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200 font-normal">
+                      历史版本
+                    </span>
+                  )}
                 </h4>
-                <span className="text-xs text-gray-400">{record.item.code}</span>
+                <span className="text-xs text-gray-400">{versionData?.item.code ?? record.item.code}</span>
               </div>
               <div className="rounded-xl border border-gray-200 bg-gray-50/50 p-5 max-h-[62vh] overflow-auto">
                 <div className="bg-white rounded-lg p-6 shadow-sm border border-gray-100 text-sm space-y-4">
@@ -721,6 +873,255 @@ function MiniSection({ title, items }: { title: string; items: string[] }) {
       <ul className="list-disc pl-5 space-y-0.5 text-gray-600 text-xs leading-relaxed">
         {items.map((it, i) => <li key={i}>{it}</li>)}
       </ul>
+    </div>
+  );
+}
+
+function CheckPanel({
+  records, onClose, onMarkFollowUp, onOpenDetail,
+}: {
+  records: ConsentRecord[];
+  onClose: () => void;
+  onMarkFollowUp: (id: string, status: 'called' | 'onsite' | 'completed', remark?: string) => void;
+  onOpenDetail: (r: ConsentRecord) => void;
+}) {
+  const [groupBy, setGroupBy] = useState<'item' | 'status' | 'operator'>('status');
+  const [remarkInput, setRemarkInput] = useState<Record<string, string>>({});
+
+  const todayRecords = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    const t = d.getTime();
+    return records.filter((r) => new Date(r.createdAt).getTime() >= t);
+  }, [records]);
+
+  const pendingRecords = useMemo(() => {
+    return todayRecords.filter((r) => r.status === 'pending' || r.status === 'resign');
+  }, [todayRecords]);
+
+  const grouped = useMemo(() => {
+    const groups: Record<string, ConsentRecord[]> = {};
+    pendingRecords.forEach((r) => {
+      let key: string;
+      if (groupBy === 'item') key = r.item.name;
+      else if (groupBy === 'status') key = r.status === 'pending' ? '未签署' : '需补签';
+      else key = r.operator || '未分配';
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(r);
+    });
+    return groups;
+  }, [pendingRecords, groupBy]);
+
+  const stats = useMemo(() => ({
+    today: todayRecords.length,
+    pending: todayRecords.filter((r) => r.status === 'pending').length,
+    resign: todayRecords.filter((r) => r.status === 'resign').length,
+    signed: todayRecords.filter((r) => r.status === 'signed').length,
+    followUpCalled: todayRecords.filter((r) => r.followUp?.status === 'called').length,
+    followUpOnsite: todayRecords.filter((r) => r.followUp?.status === 'onsite').length,
+  }), [todayRecords]);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center animate-fade-in p-4 no-print" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-[1200px] max-h-[90vh] overflow-hidden animate-scale-in flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-orange-50 via-white to-amber-50">
+          <div className="flex items-center gap-4">
+            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-orange-100 to-amber-100 flex items-center justify-center text-2xl">
+              📋
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                今日漏签核对面板
+                <span className="text-[11px] text-orange-600 bg-orange-50 px-2 py-0.5 rounded-full border border-orange-200 font-medium">
+                  {pendingRecords.length} 份待处理
+                </span>
+              </h3>
+              <p className="text-xs text-gray-500 mt-0.5">
+                今日共 {stats.today} 份 · 已签 {stats.signed} · 未签 {stats.pending} · 需补签 {stats.resign}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <button onClick={onClose} className="w-8 h-8 rounded-full hover:bg-gray-100 flex items-center justify-center text-gray-500">
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-5 gap-3 px-6 py-4 border-b border-gray-100 bg-gray-50/50">
+          <CheckStatCard label="今日总数" value={stats.today} color="text-primary-600" bg="bg-primary-50" />
+          <CheckStatCard label="未签署" value={stats.pending} color="text-status-pending" bg="bg-orange-50" />
+          <CheckStatCard label="需补签" value={stats.resign} color="text-status-resign" bg="bg-red-50" />
+          <CheckStatCard label="已电话提醒" value={stats.followUpCalled} color="text-blue-600" bg="bg-blue-50" />
+          <CheckStatCard label="已现场处理" value={stats.followUpOnsite} color="text-status-signed" bg="bg-green-50" />
+        </div>
+
+        <div className="px-6 py-3 border-b border-gray-100 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500">分组方式：</span>
+            <div className="flex bg-gray-100 rounded-lg p-0.5">
+              {[
+                { key: 'status' as const, label: '按状态' },
+                { key: 'item' as const, label: '按项目' },
+                { key: 'operator' as const, label: '按咨询师' },
+              ].map((g) => (
+                <button
+                  key={g.key}
+                  type="button"
+                  onClick={() => setGroupBy(g.key)}
+                  className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                    groupBy === g.key
+                      ? 'bg-white text-primary-600 shadow-sm'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  {g.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="text-xs text-gray-400">
+            共 {Object.keys(grouped).length} 组 · {pendingRecords.length} 条记录
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-auto p-6 space-y-5">
+          {Object.entries(grouped).map(([groupName, items]) => (
+            <div key={groupName} className="card overflow-hidden">
+              <div className="px-4 py-2.5 bg-gray-50/80 border-b border-gray-100 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {groupBy === 'status' ? (
+                    <StatusBadge status={groupName === '未签署' ? 'pending' : 'resign'} size="sm" />
+                  ) : groupBy === 'item' ? (
+                    <span className="text-[11px] px-2 py-0.5 bg-primary-50 text-primary-600 rounded font-medium">{groupName}</span>
+                  ) : (
+                    <span className="text-[11px] px-2 py-0.5 bg-accent-50 text-accent-600 rounded font-medium flex items-center gap-1">
+                      <Users size={11} />
+                      {groupName}
+                    </span>
+                  )}
+                  <span className="text-sm font-semibold text-gray-700">{groupName}</span>
+                  <span className="text-[10px] text-gray-400">共 {items.length} 条</span>
+                </div>
+              </div>
+              <div className="divide-y divide-gray-50">
+                {items.map((r) => (
+                  <div key={r.id} className="px-4 py-3 flex items-center gap-4 hover:bg-gray-50/50 transition-colors">
+                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary-100 to-accent-100 text-primary-700 flex items-center justify-center font-semibold text-sm border border-white shadow-sm shrink-0">
+                      {r.patient.name.slice(0, 1)}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-gray-800 text-sm">{r.patient.name}</span>
+                        <span className="text-[11px] text-gray-400">{r.patient.gender}·{r.patient.age}岁</span>
+                        <span className="text-[10px] px-1.5 py-0.5 bg-primary-50 text-primary-600 rounded font-mono">{r.item.name}</span>
+                        <span className="text-[10px] text-gray-400">{r.toothPosition}</span>
+                      </div>
+                      <div className="text-[11px] text-gray-500 mt-0.5 font-mono">
+                        {r.patient.medicalRecordNo} · 创建于 {formatDate(r.createdAt, 'time')}
+                        {r.operator && <span className="ml-2">· 咨询师：{r.operator}</span>}
+                      </div>
+                      {r.followUp && (
+                        <div className="text-[10px] text-gray-500 mt-0.5 flex items-center gap-1.5">
+                          <Clock size={10} />
+                          上次跟进：{r.followUp.status === 'called' ? '电话提醒' : r.followUp.status === 'onsite' ? '现场处理' : '已完成'}
+                          {' · '}
+                          {formatDate(r.followUp.updatedAt, 'time')}
+                          {r.followUp.remark && <span className="text-primary-600">· {r.followUp.remark}</span>}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <input
+                        type="text"
+                        className="input-field w-32 text-xs py-1"
+                        placeholder="备注（可选）"
+                        value={remarkInput[r.id] ?? ''}
+                        onChange={(e) => setRemarkInput({ ...remarkInput, [r.id]: e.target.value })}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onMarkFollowUp(r.id, 'called', remarkInput[r.id]);
+                          setRemarkInput({ ...remarkInput, [r.id]: '' });
+                        }}
+                        className="btn-outline text-xs py-1 px-2.5"
+                        title="标记已电话提醒"
+                      >
+                        <Phone size={12} />
+                        电话
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onMarkFollowUp(r.id, 'onsite', remarkInput[r.id]);
+                          setRemarkInput({ ...remarkInput, [r.id]: '' });
+                        }}
+                        className="btn-outline text-xs py-1 px-2.5"
+                        title="标记已现场处理"
+                      >
+                        <Users size={12} />
+                        现场
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onMarkFollowUp(r.id, 'completed', remarkInput[r.id]);
+                          setRemarkInput({ ...remarkInput, [r.id]: '' });
+                        }}
+                        className="btn-primary text-xs py-1 px-2.5"
+                        title="标记已完成"
+                      >
+                        <CheckCircle2 size={12} />
+                        完成
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onOpenDetail(r)}
+                        className="w-7 h-7 rounded-md hover:bg-gray-100 flex items-center justify-center text-gray-500"
+                        title="查看详情"
+                      >
+                        <Eye size={13} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+
+          {pendingRecords.length === 0 && (
+            <div className="text-center py-16">
+              <div className="text-5xl mb-3 opacity-40">🎉</div>
+              <p className="text-gray-400 text-sm">太棒了！今日暂无漏签记录</p>
+            </div>
+          )}
+        </div>
+
+        <div className="px-6 py-3.5 border-t border-gray-100 bg-gray-50/50 flex items-center justify-between">
+          <p className="text-[11px] text-gray-400">
+            💡 下班前请核对所有漏签记录，标记跟进状态，确保无遗漏
+          </p>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500">
+              未处理：{pendingRecords.filter(r => !r.followUp || r.followUp.status === 'pending').length}
+            </span>
+            <button onClick={onClose} className="btn-primary text-sm">
+              <CheckCircle2 size={14} />
+              完成核对
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CheckStatCard({ label, value, color, bg }: { label: string; value: number; color: string; bg: string }) {
+  return (
+    <div className={`px-3 py-2.5 rounded-xl ${bg} border border-white shadow-sm`}>
+      <div className="text-[10px] text-gray-500 mb-0.5">{label}</div>
+      <div className={`text-xl font-bold ${color}`}>{value}</div>
     </div>
   );
 }
