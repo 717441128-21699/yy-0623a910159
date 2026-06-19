@@ -45,6 +45,7 @@ export default function RecordsPage() {
   const requestResign = useConsentStore((s) => s.requestResign);
   const setFollowUp = useConsentStore((s) => s.setFollowUp);
   const addNote = useConsentStore((s) => s.addNote);
+  const resolveQCIssue = useConsentStore((s) => s.resolveQCIssue);
 
   const [filter, setFilter] = useState<FilterKey>('all');
   const [keyword, setKeyword] = useState('');
@@ -122,6 +123,7 @@ export default function RecordsPage() {
     };
 
     const formatSection = (items?: string[]) => (items && items.length > 0 ? items.join('；') : '');
+
     const diffSection = (record: ConsentRecord, key: 'riskNotice' | 'alternatives' | 'anesthesiaNote' | 'postOperative') => {
       const standard = getTemplateByCode(record.item.code);
       const override = record.templateOverride?.[key];
@@ -131,7 +133,28 @@ export default function RecordsPage() {
       return marker + formatSection(actual);
     };
 
-    const header = '编号,患者姓名,性别,年龄,病历号,联系电话,就诊项目,治疗牙位,费用说明,状态,是否自定义模板,咨询师,创建时间,签署时间,补签次数,跟进状态,风险告知,替代方案,麻醉说明,术后注意事项';
+    const computeDiff = (record: ConsentRecord, key: 'riskNotice' | 'alternatives' | 'anesthesiaNote' | 'postOperative') => {
+      const standard = getTemplateByCode(record.item.code);
+      const override = record.templateOverride?.[key];
+      if (!override) return '';
+      const standardContent = standard?.[key] ?? [];
+      const diffs: string[] = [];
+      override.forEach((item, i) => {
+        if (i >= standardContent.length) {
+          diffs.push(`[新增] ${item}`);
+        } else if (item !== standardContent[i]) {
+          diffs.push(`[修改] 标准：${standardContent[i]} → 实际：${item}`);
+        }
+      });
+      if (standardContent.length > override.length) {
+        for (let i = override.length; i < standardContent.length; i++) {
+          diffs.push(`[删除] ${standardContent[i]}`);
+        }
+      }
+      return diffs.join('；');
+    };
+
+    const header = '编号,患者姓名,性别,年龄,病历号,联系电话,就诊项目,治疗牙位,费用说明,状态,是否自定义模板,咨询师,创建时间,签署时间,补签次数,跟进状态,风险告知,替代方案,麻醉说明,术后注意事项,风险告知差异,替代方案差异,麻醉说明差异,术后注意事项差异';
     const rows = todays.map((r) => [
       r.id.slice(-8).toUpperCase(),
       r.patient.name,
@@ -156,6 +179,10 @@ export default function RecordsPage() {
       diffSection(r, 'alternatives'),
       diffSection(r, 'anesthesiaNote'),
       diffSection(r, 'postOperative'),
+      computeDiff(r, 'riskNotice'),
+      computeDiff(r, 'alternatives'),
+      computeDiff(r, 'anesthesiaNote'),
+      computeDiff(r, 'postOperative'),
     ].map((v) => `"${String(v).replace(/"/g, '""')}"`).join(','));
 
     const csv = '\ufeff' + [header, ...rows].join('\n');
@@ -468,6 +495,9 @@ export default function RecordsPage() {
           onAddNote={(id, content) => addNote(id, content, '王助理')}
           onMarkFollowUp={(id, status, remark) => {
             setFollowUp(id, status, '王助理', remark);
+          }}
+          onResolveQCIssue={(recordId, issueId, issueType, remark) => {
+            resolveQCIssue(recordId, issueId, issueType, '王助理', remark);
           }}
         />
       )}
@@ -1201,17 +1231,18 @@ function CheckStatCard({ label, value, color, bg }: { label: string; value: numb
 }
 
 function QCPanel({
-  records, onClose, onOpenDetail, onAddNote, onMarkFollowUp,
+  records, onClose, onOpenDetail, onAddNote, onMarkFollowUp, onResolveQCIssue,
 }: {
   records: ConsentRecord[];
   onClose: () => void;
   onOpenDetail: (r: ConsentRecord) => void;
   onAddNote: (id: string, content: string) => void;
   onMarkFollowUp: (id: string, status: 'called' | 'onsite' | 'completed', remark?: string) => void;
+  onResolveQCIssue: (recordId: string, issueId: string, issueType: string, remark?: string) => void;
 }) {
-  const [resolvedMap, setResolvedMap] = useState<Record<string, { by: string; at: string; remark?: string }>>({});
   const [remarkInput, setRemarkInput] = useState<Record<string, string>>({});
   const [filterType, setFilterType] = useState<'all' | QCIssueType>('all');
+  const [showResolved, setShowShowResolved] = useState(false);
 
   const issues = useMemo<QCIssue[]>(() => {
     const result: QCIssue[] = [];
@@ -1220,88 +1251,120 @@ function QCPanel({
     const t = today.getTime();
 
     records.forEach((r) => {
+      const resolved = r.qcResolutions ?? [];
+      const isResolved = (issueId: string) => resolved.some((x) => x.issueId === issueId);
+
       if (r.status === 'signed' && !r.signatureData) {
+        const id = `q-missig-${r.id}`;
         result.push({
-          id: `q-missig-${r.id}`,
+          id,
           type: 'missing_signature',
           recordId: r.id,
           title: QC_ISSUE_LABELS.missing_signature.label,
           description: '已标记为已签署但缺少签名图片数据，请检查签署流程或申请补签',
           severity: 'high',
-          resolved: !!resolvedMap[`q-missig-${r.id}`],
+          resolved: isResolved(id),
+          resolvedBy: resolved.find((x) => x.issueId === id)?.resolvedBy,
+          resolvedAt: resolved.find((x) => x.issueId === id)?.resolvedAt,
+          resolvedRemark: resolved.find((x) => x.issueId === id)?.remark,
           createdAt: r.signedAt || r.createdAt,
         });
       }
       if (r.status === 'signed') {
         const allRead = r.readings?.risk && r.readings?.alternatives && r.readings?.anesthesia && r.readings?.postOperative;
         if (!allRead) {
+          const id = `q-unread-${r.id}`;
+          const missing: string[] = [];
+          if (!r.readings?.risk) missing.push('风险告知');
+          if (!r.readings?.alternatives) missing.push('替代方案');
+          if (!r.readings?.anesthesia) missing.push('麻醉说明');
+          if (!r.readings?.postOperative) missing.push('术后注意事项');
           result.push({
-            id: `q-unread-${r.id}`,
+            id,
             type: 'signed_but_unread',
             recordId: r.id,
             title: QC_ISSUE_LABELS.signed_but_unread.label,
-            description: (() => {
-              const missing: string[] = [];
-              if (!r.readings?.risk) missing.push('风险告知');
-              if (!r.readings?.alternatives) missing.push('替代方案');
-              if (!r.readings?.anesthesia) missing.push('麻醉说明');
-              if (!r.readings?.postOperative) missing.push('术后注意事项');
-              return `未完成阅读的步骤：${missing.join('、')}`;
-            })(),
+            description: `未完成阅读的步骤：${missing.join('、')}`,
             severity: 'medium',
-            resolved: !!resolvedMap[`q-unread-${r.id}`],
+            resolved: isResolved(id),
+            resolvedBy: resolved.find((x) => x.issueId === id)?.resolvedBy,
+            resolvedAt: resolved.find((x) => x.issueId === id)?.resolvedAt,
+            resolvedRemark: resolved.find((x) => x.issueId === id)?.remark,
             createdAt: r.signedAt || r.createdAt,
           });
         }
       }
-      if ((r.status === 'resign' || (r.signHistory?.filter((h) => h.type === 'resign').length ?? 0) > 0) && !r.resignReason) {
-        result.push({
-          id: `q-resign-${r.id}`,
-          type: 'empty_resign_reason',
-          recordId: r.id,
-          title: QC_ISSUE_LABELS.empty_resign_reason.label,
-          description: '补签记录缺少补签原因说明，请补充记录便于追溯',
-          severity: 'medium',
-          resolved: !!resolvedMap[`q-resign-${r.id}`],
-          createdAt: r.createdAt,
-        });
+      if (r.status === 'resign' || (r.signHistory?.filter((h) => h.type === 'resign').length ?? 0) > 0) {
+        const resignEntries = r.signHistory?.filter((h) => h.type === 'resign') ?? [];
+        const hasAnyMissingReason = resignEntries.some((h) => !h.reason);
+        if (hasAnyMissingReason) {
+          const id = `q-resign-${r.id}`;
+          const missingReasons = resignEntries
+            .map((h, i) => ({ idx: i + 1, hasReason: !!h.reason }))
+            .filter((x) => !x.hasReason)
+            .map((x) => `第${x.idx}次`);
+          result.push({
+            id,
+            type: 'empty_resign_reason',
+            recordId: r.id,
+            title: QC_ISSUE_LABELS.empty_resign_reason.label,
+            description: `补签原因缺失：${missingReasons.join('、')}补签未填写原因（已填写${resignEntries.filter(h => h.reason).length}/${resignEntries.length}次）`,
+            severity: 'medium',
+            resolved: isResolved(id),
+            resolvedBy: resolved.find((x) => x.issueId === id)?.resolvedBy,
+            resolvedAt: resolved.find((x) => x.issueId === id)?.resolvedAt,
+            resolvedRemark: resolved.find((x) => x.issueId === id)?.remark,
+            createdAt: r.createdAt,
+          });
+        }
       }
       if ((r.status === 'pending' || r.status === 'resign') && new Date(r.createdAt).getTime() >= t && (!r.followUp || r.followUp.status === 'pending')) {
+        const id = `q-follow-${r.id}`;
         result.push({
-          id: `q-follow-${r.id}`,
+          id,
           type: 'today_pending_no_followup',
           recordId: r.id,
           title: QC_ISSUE_LABELS.today_pending_no_followup.label,
           description: '今日待签署/需补签记录尚未安排跟进',
           severity: 'high',
-          resolved: !!resolvedMap[`q-follow-${r.id}`],
+          resolved: isResolved(id),
+          resolvedBy: resolved.find((x) => x.issueId === id)?.resolvedBy,
+          resolvedAt: resolved.find((x) => x.issueId === id)?.resolvedAt,
+          resolvedRemark: resolved.find((x) => x.issueId === id)?.remark,
           createdAt: r.createdAt,
         });
       }
       if (r.status === 'signed' && (!r.signHistory || r.signHistory.length === 0 || !r.signHistory[0].snapshot)) {
+        const id = `q-snap-${r.id}`;
         result.push({
-          id: `q-snap-${r.id}`,
+          id,
           type: 'missing_snapshot',
           recordId: r.id,
           title: QC_ISSUE_LABELS.missing_snapshot.label,
           description: '签署记录缺少签署时的内容快照，历史版本追溯将不可用',
           severity: 'low',
-          resolved: !!resolvedMap[`q-snap-${r.id}`],
+          resolved: isResolved(id),
+          resolvedBy: resolved.find((x) => x.issueId === id)?.resolvedBy,
+          resolvedAt: resolved.find((x) => x.issueId === id)?.resolvedAt,
+          resolvedRemark: resolved.find((x) => x.issueId === id)?.remark,
           createdAt: r.signedAt || r.createdAt,
         });
       }
     });
 
     return result.sort((a, b) => {
+      if (a.resolved !== b.resolved) return a.resolved ? 1 : -1;
       const sevOrder = { high: 0, medium: 1, low: 2 };
       if (sevOrder[a.severity] !== sevOrder[b.severity]) return sevOrder[a.severity] - sevOrder[b.severity];
       return a.createdAt < b.createdAt ? -1 : 1;
     });
-  }, [records, resolvedMap]);
+  }, [records]);
 
-  const filteredIssues = useMemo(() => (
-    filterType === 'all' ? issues : issues.filter((i) => i.type === filterType)
-  ), [issues, filterType]);
+  const filteredIssues = useMemo(() => {
+    let list = filterType === 'all' ? issues : issues.filter((i) => i.type === filterType);
+    if (!showResolved) list = list.filter((i) => !i.resolved);
+    return list;
+  }, [issues, filterType, showResolved]);
 
   const stats = useMemo(() => ({
     total: issues.length,
@@ -1309,17 +1372,16 @@ function QCPanel({
     medium: issues.filter((i) => i.severity === 'medium').length,
     low: issues.filter((i) => i.severity === 'low').length,
     resolved: issues.filter((i) => i.resolved).length,
+    unresolved: issues.filter((i) => !i.resolved).length,
   }), [issues]);
 
   function markResolved(issue: QCIssue) {
-    setResolvedMap({
-      ...resolvedMap,
-      [issue.id]: { by: '王助理', at: nowISO(), remark: remarkInput[issue.id] || undefined },
-    });
+    const remark = remarkInput[issue.id];
+    onResolveQCIssue(issue.recordId, issue.id, issue.type, remark || undefined);
     if (issue.type === 'today_pending_no_followup') {
-      onMarkFollowUp(issue.recordId, 'called', remarkInput[issue.id] || '质控已核查');
-    } else if (remarkInput[issue.id]) {
-      onAddNote(issue.recordId, `【质控处理】${remarkInput[issue.id]}`);
+      onMarkFollowUp(issue.recordId, 'called', remark || '质控已核查');
+    } else if (remark) {
+      onAddNote(issue.recordId, `【质控处理】${remark}`);
     }
     setRemarkInput({ ...remarkInput, [issue.id]: '' });
   }
@@ -1344,7 +1406,7 @@ function QCPanel({
               <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
                 签后质控视图
                 <span className="text-[11px] text-red-600 bg-red-50 px-2 py-0.5 rounded-full border border-red-200 font-medium">
-                  {issues.length - stats.resolved} / {issues.length} 待处理
+                  {stats.unresolved} / {stats.total} 待处理
                 </span>
               </h3>
               <p className="text-xs text-gray-500 mt-0.5">
@@ -1352,11 +1414,9 @@ function QCPanel({
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            <button onClick={onClose} className="w-8 h-8 rounded-full hover:bg-gray-100 flex items-center justify-center text-gray-500">
-              <X size={18} />
-            </button>
-          </div>
+          <button onClick={onClose} className="w-8 h-8 rounded-full hover:bg-gray-100 flex items-center justify-center text-gray-500">
+            <X size={18} />
+          </button>
         </div>
 
         <div className="px-6 py-3 border-b border-gray-100 flex items-center justify-between bg-gray-50/50 flex-wrap gap-2">
@@ -1386,8 +1446,19 @@ function QCPanel({
               ))}
             </div>
           </div>
-          <div className="text-xs text-gray-400">
-            共 {filteredIssues.length} 条异常记录
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showResolved}
+                onChange={(e) => setShowShowResolved(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              显示已处理（{stats.resolved}）
+            </label>
+            <span className="text-xs text-gray-400">
+              共 {filteredIssues.length} 条
+            </span>
           </div>
         </div>
 
@@ -1401,9 +1472,10 @@ function QCPanel({
                   {severityBadge(issue.severity)}
                   <span className="font-semibold text-gray-800 text-sm">{issue.title}</span>
                   <span className="text-[10px] text-gray-400 flex-1">{issue.description}</span>
-                  {issue.resolved && resolvedMap[issue.id] && (
+                  {issue.resolved && (
                     <span className="text-[10px] text-green-600 bg-green-50 px-2 py-0.5 rounded-full border border-green-200 font-medium">
-                      ✓ 已处理 · {resolvedMap[issue.id].by} · {formatDate(resolvedMap[issue.id].at, 'time')}
+                      ✓ 已处理 · {issue.resolvedBy} · {issue.resolvedAt ? formatDate(issue.resolvedAt, 'time') : ''}
+                      {issue.resolvedRemark && ` · ${issue.resolvedRemark}`}
                     </span>
                   )}
                 </div>
@@ -1423,6 +1495,23 @@ function QCPanel({
                       {record.patient.medicalRecordNo} · 签署时间 {record.signedAt ? formatDate(record.signedAt, 'datetime') : '未签署'}
                       {record.operator && <span className="ml-2">· 咨询师：{record.operator}</span>}
                     </div>
+                    {issue.type === 'empty_resign_reason' && record.signHistory && (
+                      <div className="mt-1.5 space-y-1">
+                        {record.signHistory.filter((h) => h.type === 'resign').map((h, i) => (
+                          <div key={h.id} className="text-[10px] text-gray-500 flex items-center gap-2 bg-gray-50 rounded px-2 py-1">
+                            <span className="font-medium text-gray-600">第{i + 1}次补签</span>
+                            <span className="text-gray-400">·</span>
+                            <span>{formatDate(h.signedAt, 'datetime')}</span>
+                            <span className="text-gray-400">·</span>
+                            <span className={h.reason ? 'text-green-600' : 'text-red-500'}>
+                              {h.reason ? `原因：${h.reason}` : '⚠ 未填原因'}
+                            </span>
+                            <span className="text-gray-400">·</span>
+                            <span>{h.signatureData ? '✓ 已签' : '✗ 未签'}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     {!issue.resolved && (
@@ -1461,18 +1550,20 @@ function QCPanel({
           {filteredIssues.length === 0 && (
             <div className="text-center py-16">
               <div className="text-5xl mb-3 opacity-40">✅</div>
-              <p className="text-gray-400 text-sm">暂无{filterType === 'all' ? '' : QC_ISSUE_LABELS[filterType as QCIssueType].label}异常记录</p>
+              <p className="text-gray-400 text-sm">
+                {showResolved ? '暂无记录' : `暂无待处理异常${stats.resolved > 0 ? `（${stats.resolved} 条已处理，勾选"显示已处理"回看）` : ''}`}
+              </p>
             </div>
           )}
         </div>
 
         <div className="px-6 py-3.5 border-t border-gray-100 bg-gray-50/50 flex items-center justify-between">
           <p className="text-[11px] text-gray-400">
-            💡 下班前请逐一处理质控异常，标记完成后可作为当日下班核对依据
+            💡 质控处理结果持久保存，下次打开仍可回看。勾选「显示已处理」可查看历史处理记录
           </p>
           <div className="flex items-center gap-2">
             <span className="text-xs text-gray-500">
-              待处理：{issues.filter(i => !i.resolved).length}
+              待处理：{stats.unresolved}
             </span>
             <button onClick={onClose} className="btn-primary text-sm">
               <CheckCircle2 size={14} />
@@ -1497,6 +1588,9 @@ function ArchivePanel({
   const [operatorFilter, setOperatorFilter] = useState<string>('all');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [archivedPackages, setArchivedPackages] = useState<ArchivePackage[]>([]);
+  const [previewRecord, setPreviewRecord] = useState<ConsentRecord | null>(null);
+  const [previewVersion, setPreviewVersion] = useState<'current' | number>('current');
+  const [showPreview, setShowPreview] = useState(false);
 
   const signedRecords = useMemo(() => records.filter((r) => r.status === 'signed'), [records]);
 
@@ -1538,6 +1632,44 @@ function ArchivePanel({
     else setSelectedIds(new Set(filtered.map((r) => r.id)));
   }
 
+  function openPreview(r: ConsentRecord) {
+    setPreviewRecord(r);
+    setPreviewVersion('current');
+    setShowPreview(true);
+  }
+
+  const previewData = useMemo(() => {
+    if (!previewRecord) return null;
+    if (previewVersion === 'current') {
+      return {
+        label: '当前最新',
+        patient: previewRecord.patient,
+        item: previewRecord.item,
+        toothPosition: previewRecord.toothPosition,
+        feeDescription: previewRecord.feeDescription,
+        templateOverride: previewRecord.templateOverride,
+        signatureData: previewRecord.signatureData,
+        signedAt: previewRecord.signedAt,
+      };
+    }
+    const h = previewRecord.signHistory?.[previewVersion as number];
+    if (!h) return null;
+    return {
+      label: h.type === 'first' ? '首次签署' : `第 ${(previewRecord.signHistory?.slice(0, (previewVersion as number) + 1).filter(x => x.type === 'resign').length ?? 0)} 次补签`,
+      patient: h.snapshot?.patient ?? previewRecord.patient,
+      item: h.snapshot?.item ?? previewRecord.item,
+      toothPosition: h.snapshot?.toothPosition ?? previewRecord.toothPosition,
+      feeDescription: h.snapshot?.feeDescription ?? previewRecord.feeDescription,
+      templateOverride: h.snapshot?.templateOverride,
+      signatureData: h.signatureData,
+      signedAt: h.signedAt,
+    };
+  }, [previewRecord, previewVersion]);
+
+  const previewTemplate = previewData
+    ? resolveTemplate(previewData.item.code, previewData.templateOverride)
+    : null;
+
   function generateArchive() {
     if (selectedIds.size === 0) return;
     const selectedRecords = filtered.filter((r) => selectedIds.has(r.id));
@@ -1565,12 +1697,26 @@ function ArchivePanel({
       lines.push(`创建时间：${formatDate(r.createdAt, 'full')}`);
       lines.push(`签署时间：${r.signedAt ? formatDate(r.signedAt, 'full') : '—'}    咨询师：${r.operator ?? '—'}`);
       lines.push(`模板状态：${hasOverride ? '已自定义条款' : '使用标准模板'}`);
-      if (r.signHistory && r.signHistory.length > 1) {
-        lines.push(`签署历史：首次签署 + ${r.signHistory.filter((h) => h.type === 'resign').length} 次补签`);
+      lines.push('');
+      lines.push('── 签署历史 ──');
+      if (r.signHistory && r.signHistory.length > 0) {
+        r.signHistory.forEach((h, hi) => {
+          const label = h.type === 'first' ? '首次签署' : `第 ${r.signHistory!.slice(0, hi + 1).filter(x => x.type === 'resign').length} 次补签`;
+          lines.push(`  · ${label}：${formatDate(h.signedAt, 'full')}${h.operator ? `  操作人：${h.operator}` : ''}${h.reason ? `  原因：${h.reason}` : ''}`);
+          lines.push(`    签名核验：${h.signatureData ? '✓ 已保存签名图片' : '✗ 无签名数据'}`);
+        });
+      } else {
+        lines.push('  · 无签署历史记录');
       }
       lines.push('');
-      lines.push('── 患者签名 ──');
-      lines.push(`签名数据：${r.signatureData ? '✓ 已保存签名图片' : '✗ 无签名数据'}`);
+      lines.push('── 签名核验 ──');
+      lines.push(`  当前签名：${r.signatureData ? '✓ 已保存签名图片（见归档附件）' : '✗ 无签名数据'}`);
+      if (r.signHistory) {
+        const resignSigs = r.signHistory.filter((h) => h.type === 'resign' && h.signatureData);
+        if (resignSigs.length > 0) {
+          lines.push(`  补签签名：共 ${resignSigs.length} 份补签签名已保存`);
+        }
+      }
       lines.push('');
       lines.push(`── ${tmpl.title} 完整条款内容 ──`);
       lines.push('');
@@ -1590,6 +1736,13 @@ function ArchivePanel({
         lines.push('── 交接备注 ──');
         r.notes.forEach((n) => {
           lines.push(`  · [${formatDate(n.createdAt, 'datetime')}] ${n.operator}：${n.content}`);
+        });
+        lines.push('');
+      }
+      if (r.qcResolutions && r.qcResolutions.length > 0) {
+        lines.push('── 质控处理记录 ──');
+        r.qcResolutions.forEach((qc) => {
+          lines.push(`  · [${formatDate(qc.resolvedAt, 'datetime')}] ${qc.resolvedBy}：${QC_ISSUE_LABELS[qc.issueType]?.label ?? qc.issueType}${qc.remark ? ` — ${qc.remark}` : ''}`);
         });
         lines.push('');
       }
@@ -1637,15 +1790,13 @@ function ArchivePanel({
                 </span>
               </h3>
               <p className="text-xs text-gray-500 mt-0.5">
-                按月份、项目、咨询师筛选后批量生成归档包，含患者基本信息、签署时间、费用、签名及完整条款
+                按月份、项目、咨询师筛选后批量生成归档包，含患者信息、签署版本、签名及完整条款
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            <button onClick={onClose} className="w-8 h-8 rounded-full hover:bg-gray-100 flex items-center justify-center text-gray-500">
-              <X size={18} />
-            </button>
-          </div>
+          <button onClick={onClose} className="w-8 h-8 rounded-full hover:bg-gray-100 flex items-center justify-center text-gray-500">
+            <X size={18} />
+          </button>
         </div>
 
         <div className="px-6 py-3 border-b border-gray-100 bg-gray-50/50 flex items-center gap-4 flex-wrap">
@@ -1761,14 +1912,24 @@ function ArchivePanel({
                     )}
                   </td>
                   <td className="py-2.5 px-3 text-right">
-                    <button
-                      type="button"
-                      onClick={() => onOpenDetail(r)}
-                      className="text-[11px] text-primary-600 hover:text-primary-700 flex items-center gap-1 justify-end ml-auto"
-                    >
-                      <FileSearch size={12} />
-                      查看详情 <ChevronRight size={12} />
-                    </button>
+                    <div className="flex items-center gap-1 justify-end">
+                      <button
+                        type="button"
+                        onClick={() => openPreview(r)}
+                        className="text-[11px] text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                      >
+                        <Eye size={12} />
+                        预览
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onOpenDetail(r)}
+                        className="text-[11px] text-primary-600 hover:text-primary-700 flex items-center gap-1"
+                      >
+                        <FileSearch size={12} />
+                        详情
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -1785,7 +1946,7 @@ function ArchivePanel({
 
         <div className="px-6 py-3.5 border-t border-gray-100 bg-gray-50/50 flex items-center justify-between">
           <p className="text-[11px] text-gray-400">
-            💡 生成的归档包（TXT 格式）包含患者基本信息、签署时间、费用说明、签名状态及完整条款内容，可直接打印或存档
+            💡 点击「预览」可先查看患者信息、签署版本、签名及条款，确认无误后再生成归档包
           </p>
           <div className="flex items-center gap-2">
             <span className="text-xs text-gray-500">
@@ -1802,6 +1963,139 @@ function ArchivePanel({
           </div>
         </div>
       </div>
+
+      {showPreview && previewRecord && (
+        <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center animate-fade-in p-4" onClick={() => setShowPreview(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-[1100px] max-h-[85vh] overflow-hidden animate-scale-in flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-blue-50 via-white to-indigo-50">
+              <div>
+                <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                  📋 归档预览
+                  <span className="text-[11px] text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200 font-medium">
+                    {previewRecord.patient.name} · {previewRecord.item.name}
+                  </span>
+                </h3>
+                <p className="text-xs text-gray-500 mt-0.5">确认患者信息、签署版本、签名及条款无误后再生成归档包</p>
+              </div>
+              <button onClick={() => setShowPreview(false)} className="w-8 h-8 rounded-full hover:bg-gray-100 flex items-center justify-center text-gray-500">
+                <X size={18} />
+              </button>
+            </div>
+
+            {(previewRecord.signHistory ?? []).length > 0 && (
+              <div className="px-6 py-2.5 border-b border-gray-100 bg-gray-50/50 flex items-center gap-1.5 overflow-x-auto">
+                <button
+                  type="button"
+                  onClick={() => setPreviewVersion('current')}
+                  className={`px-3 py-1 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${
+                    previewVersion === 'current' ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:bg-gray-100'
+                  }`}
+                >
+                  当前最新
+                </button>
+                {(previewRecord.signHistory ?? []).map((h, i) => (
+                  <button
+                    key={h.id}
+                    type="button"
+                    onClick={() => setPreviewVersion(i)}
+                    className={`px-3 py-1 rounded-md text-xs font-medium whitespace-nowrap transition-colors flex items-center gap-1 ${
+                      previewVersion === i ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:bg-gray-100'
+                    }`}
+                  >
+                    {h.type === 'first' ? '首次签署' : `补签 ${previewRecord.signHistory!.slice(0, i + 1).filter(x => x.type === 'resign').length}`}
+                    {h.snapshot && <span className="text-[9px] text-green-500">●</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="flex-1 overflow-auto p-6">
+              {previewData && previewTemplate && (
+                <div className="grid grid-cols-5 gap-6">
+                  <div className="col-span-2 space-y-4">
+                    <div className="card p-4">
+                      <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                        <User size={14} className="text-primary-500" />
+                        患者信息
+                        <span className="text-[10px] text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200 font-normal">
+                          {previewData.label}
+                        </span>
+                      </h4>
+                      <div className="space-y-1.5 text-xs">
+                        <InfoRow label="姓名" value={previewData.patient.name} />
+                        <InfoRow label="性别" value={previewData.patient.gender} />
+                        <InfoRow label="年龄" value={`${previewData.patient.age}岁`} />
+                        <InfoRow label="病历号" value={previewData.patient.medicalRecordNo} mono />
+                        <InfoRow label="联系电话" value={previewData.patient.phone} mono />
+                      </div>
+                    </div>
+
+                    <div className="card p-4">
+                      <h4 className="text-sm font-semibold text-gray-700 mb-3">就诊信息</h4>
+                      <div className="space-y-1.5 text-xs">
+                        <InfoRow label="项目" value={previewData.item.name} />
+                        <InfoRow label="牙位" value={previewData.toothPosition} />
+                        <InfoRow label="费用" value={previewData.feeDescription} />
+                        <InfoRow label="签署时间" value={previewData.signedAt ? formatDate(previewData.signedAt, 'datetime') : '—'} />
+                        <InfoRow label="模板状态" value={previewData.templateOverride ? '已自定义条款' : '标准模板'} />
+                      </div>
+                    </div>
+
+                    <div className="card p-4">
+                      <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                        ✍️ 签名核验
+                      </h4>
+                      {previewData.signatureData ? (
+                        <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                          <img src={previewData.signatureData} alt="签名" className="max-h-20 w-full object-contain" />
+                          <div className="mt-2 text-[10px] text-green-600 text-center">✓ 签名已保存，可核验</div>
+                        </div>
+                      ) : (
+                        <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 p-6 text-center">
+                          <div className="text-2xl mb-1 opacity-30">✍️</div>
+                          <p className="text-xs text-gray-400">无签名数据</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="col-span-3">
+                    <div className="card p-4 h-full">
+                      <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                        📄 条款内容
+                        {previewData.templateOverride && (
+                          <span className="text-[10px] text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 font-normal">
+                            已自定义
+                          </span>
+                        )}
+                      </h4>
+                      <div className="rounded-xl border border-gray-200 bg-gray-50/50 p-4 max-h-[55vh] overflow-auto">
+                        <div className="bg-white rounded-lg p-5 shadow-sm border border-gray-100 text-sm space-y-3">
+                          <h5 className="text-center font-bold text-base text-primary-700 border-b border-gray-200 pb-2 mb-2">{previewTemplate.title}</h5>
+                          <MiniSection title="风险告知" items={previewTemplate.riskNotice} />
+                          <MiniSection title="替代方案" items={previewTemplate.alternatives} />
+                          <MiniSection title="麻醉说明" items={previewTemplate.anesthesiaNote} />
+                          <MiniSection title="术后注意事项" items={previewTemplate.postOperative} />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-3 border-t border-gray-100 bg-gray-50/50 flex items-center justify-between">
+              <p className="text-[11px] text-gray-400">
+                💡 切换版本可查看每次签署时的完整快照，确认内容无误后关闭预览并生成归档包
+              </p>
+              <button onClick={() => setShowPreview(false)} className="btn-primary text-sm">
+                <CheckCircle2 size={14} />
+                确认无误
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

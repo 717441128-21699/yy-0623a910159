@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ConsentRecord, ConsentStatus, FollowUpStatus, Patient, TemplateOverride, TreatmentItem } from '@/types';
+import type { ConsentRecord, ConsentStatus, FollowUpStatus, Patient, QCResolution, TemplateOverride, TreatmentItem } from '@/types';
 import { generateId } from '@/utils/id';
 import { nowISO } from '@/utils/date';
 
@@ -57,6 +57,8 @@ interface ConsentState {
   addNote: (id: string, content: string, operator: string) => void;
 
   setFollowUp: (id: string, status: FollowUpStatus, operator: string, remark?: string) => void;
+
+  resolveQCIssue: (recordId: string, issueId: string, issueType: string, operator: string, remark?: string) => void;
 
   seedDemoData: () => void;
 }
@@ -237,6 +239,24 @@ export const useConsentStore = create<ConsentState>((set, get) => ({
           updatedAt: nowISO(),
         },
       };
+    });
+    saveToStorage(records);
+    set({ records });
+  },
+
+  resolveQCIssue: (recordId, issueId, issueType, operator, remark) => {
+    const resolution: QCResolution = {
+      issueId,
+      issueType: issueType as QCResolution['issueType'],
+      resolvedBy: operator,
+      resolvedAt: nowISO(),
+      remark,
+    };
+    const records = get().records.map((r) => {
+      if (r.id !== recordId) return r;
+      const existing = r.qcResolutions ?? [];
+      const filtered = existing.filter((x) => x.issueId !== issueId);
+      return { ...r, qcResolutions: [...filtered, resolution] };
     });
     saveToStorage(records);
     set({ records });

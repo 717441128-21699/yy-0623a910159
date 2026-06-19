@@ -85,6 +85,7 @@ export interface ConsentRecord {
   notes?: RecordNote[];
   followUp?: FollowUp;
   operator?: string;
+  qcResolutions?: QCResolution[];
 }
 
 export interface ConsentTemplateContent {
@@ -131,6 +132,14 @@ export interface QCIssue {
   resolvedAt?: string;
   resolvedRemark?: string;
   createdAt: string;
+}
+
+export interface QCResolution {
+  issueId: string;
+  issueType: QCIssueType;
+  resolvedBy: string;
+  resolvedAt: string;
+  remark?: string;
 }
 
 export interface ArchivePackage {
